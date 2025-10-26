@@ -1,0 +1,74 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Cores da Pastoral Familiar */
+  --color-pastoral-blue: #0056A3;
+  --color-pastoral-blue-dark: #003460;
+  --color-pastoral-blue-light: #338fff;
+
+  /* Cores da Paróquia */
+  --color-paroquia-gold: #D4AF37;
+  --color-paroquia-dark: #1a1a1a;
+
+  /* Gradientes */
+  --gradient-primary: linear-gradient(135deg, #0056A3 0%, #338fff 100%);
+  --gradient-gold: linear-gradient(135deg, #D4AF37 0%, #f7e79f 100%);
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Animações personalizadas */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.5s ease-out;
+}
+
+/* Estilo para scrollbar */
+::-webkit-scrollbar {
+  width: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-pastoral-blue);
+  border-radius: 5px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-pastoral-blue-dark);
+}
+
+/* Estilo de foco personalizado */
+input:focus,
+textarea:focus,
+select:focus {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(0, 86, 163, 0.1);
+}
