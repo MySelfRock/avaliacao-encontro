@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { API_ENDPOINTS } from '../config/api';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
@@ -53,7 +54,7 @@ export function Estatisticas() {
   const fetchEstatisticas = async () => {
     try {
       setLoading(true);
-      const response = await fetch('http://localhost:3001/api/estatisticas');
+      const response = await fetch(API_ENDPOINTS.estatisticas);
 
       if (!response.ok) {
         throw new Error('Erro ao buscar estatísticas');
@@ -89,7 +90,7 @@ export function Estatisticas() {
 
       // Buscar avaliações detalhadas
       console.log('Buscando avaliações detalhadas...');
-      const response = await fetch('http://localhost:3001/api/avaliacoes/detalhadas');
+      const response = await fetch(`${API_ENDPOINTS.avaliacoes}/detalhadas`);
       if (!response.ok) {
         const errorText = await response.text();
         console.error('Erro na resposta da API:', errorText);

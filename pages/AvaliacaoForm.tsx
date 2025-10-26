@@ -4,6 +4,7 @@ import { StarRating } from "../components/StarRating";
 import { SectionCard } from "../components/SectionCard";
 import { QuestionGroup } from "../components/QuestionGroup";
 import { QuestionRow } from "../components/QuestionRow";
+import { API_ENDPOINTS } from "../config/api";
 
 const initialFormData: EvaluationData = {
   basicInfo: { coupleName: "", encounterDate: "" },
@@ -143,7 +144,7 @@ export function AvaliacaoForm() {
       console.log("📤 Enviando avaliação para o servidor...");
       console.log("Dados:", JSON.stringify(formData, null, 2));
 
-      const response = await fetch("http://localhost:3001/api/avaliacoes", {
+      const response = await fetch(API_ENDPOINTS.avaliacoes, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

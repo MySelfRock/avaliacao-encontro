@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { API_ENDPOINTS } from '../config/api';
 
 interface Interessado {
   avaliacao_id: number;
@@ -24,7 +25,7 @@ export function Interessados() {
   const fetchInteressados = async () => {
     try {
       setLoading(true);
-      const response = await fetch('http://localhost:3001/api/pastoral/interessados');
+      const response = await fetch(API_ENDPOINTS.interessados);
 
       if (!response.ok) {
         throw new Error('Erro ao buscar interessados');

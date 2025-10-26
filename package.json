@@ -5,11 +5,14 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "npm run build:frontend && npm run build:backend",
+    "build:frontend": "vite build",
+    "build:backend": "tsc server/index.ts server/database.ts --outDir dist/server --module commonjs --moduleResolution node --esModuleInterop true --skipLibCheck true --resolveJsonModule true",
     "preview": "vite preview",
     "server": "tsx server/index.ts",
     "server:watch": "tsx watch server/index.ts",
     "start": "concurrently \"npm run server:watch\" \"npm run dev\"",
+    "start:prod": "NODE_ENV=production node dist/server/server/index.js",
     "init-db": "tsx -e \"import { initializeDatabase } from './server/database'; initializeDatabase();\""
   },
   "dependencies": {

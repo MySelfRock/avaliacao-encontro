@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import path from 'path';
 import {
   initializeDatabase,
   insertAvaliacao,
@@ -7,17 +8,22 @@ import {
   getAvaliacaoById,
   getEstatisticas,
   getInteressadosPastoral,
-  getTodosContatos,
-  getAllAvaliacoesDetalhadas
+  getTodosContatos
 } from './database';
 import type { EvaluationData } from '../types';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+const isProduction = process.env.NODE_ENV === 'production';
 
 // Middlewares
 app.use(cors());
 app.use(express.json());
+
+// Servir arquivos estáticos do build do frontend em produção
+if (isProduction) {
+  app.use(express.static(path.join(__dirname, '../dist')));
+}
 
 // Inicializar banco de dados
 initializeDatabase();
@@ -87,26 +93,25 @@ app.get('/api/avaliacoes', (req, res) => {
 
 // GET - Buscar todas as avaliações detalhadas (para relatório completo)
 // IMPORTANTE: Este endpoint deve vir ANTES de /api/avaliacoes/:id
-app.get('/api/avaliacoes/detalhadas', (req, res) => {
-  try {
-    const avaliacoes = getAllAvaliacoesDetalhadas();
-
-    console.log(`📋 Buscando avaliações detalhadas: ${avaliacoes.length} encontrada(s)`);
-
-    res.json({
-      success: true,
-      total: avaliacoes.length,
-      data: avaliacoes,
-      message: `${avaliacoes.length} avaliação(ões) encontrada(s)`
-    });
-  } catch (error) {
-    console.error('❌ Erro ao buscar avaliações detalhadas:', error);
-    res.status(500).json({
-      error: 'Erro ao buscar avaliações detalhadas',
-      message: error instanceof Error ? error.message : 'Erro desconhecido'
-    });
-  }
-});
+// Comentado temporariamente - função não implementada no database.ts
+// app.get('/api/avaliacoes/detalhadas', (req, res) => {
+//   try {
+//     const avaliacoes = getAllAvaliacoesDetalhadas();
+//     console.log(`📋 Buscando avaliações detalhadas: ${avaliacoes.length} encontrada(s)`);
+//     res.json({
+//       success: true,
+//       total: avaliacoes.length,
+//       data: avaliacoes,
+//       message: `${avaliacoes.length} avaliação(ões) encontrada(s)`
+//     });
+//   } catch (error) {
+//     console.error('❌ Erro ao buscar avaliações detalhadas:', error);
+//     res.status(500).json({
+//       error: 'Erro ao buscar avaliações detalhadas',
+//       message: error instanceof Error ? error.message : 'Erro desconhecido'
+//     });
+//   }
+// });
 
 // GET - Buscar avaliação específica por ID (completa)
 app.get('/api/avaliacoes/:id', (req, res) => {
@@ -204,13 +209,20 @@ app.get('/api/contatos', (req, res) => {
   }
 });
 
-// Rota 404
-app.use((req, res) => {
-  res.status(404).json({
-    error: 'Rota não encontrada',
-    message: `A rota ${req.method} ${req.path} não existe`
+// Em produção, servir o frontend para todas as rotas que não sejam API
+if (isProduction) {
+  app.get('*', (_req, res) => {
+    res.sendFile(path.join(__dirname, '../dist/index.html'));
   });
-});
+} else {
+  // Rota 404 apenas em desenvolvimento
+  app.use((req, res) => {
+    res.status(404).json({
+      error: 'Rota não encontrada',
+      message: `A rota ${req.method} ${req.path} não existe`
+    });
+  });
+}
 
 // Iniciar servidor
 app.listen(PORT, () => {

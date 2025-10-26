@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: avaliacao-encontro-noivos
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm run start:prod
+    envVars:
+      - key: NODE_ENV
+        value: production
+    disk:
+      name: sqlite-data
+      mountPath: /opt/render/project/src
+      sizeGB: 1
