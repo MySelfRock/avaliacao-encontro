@@ -1,0 +1,38 @@
+[Unit]
+Description=Avaliação do Encontro de Noivos - Pastoral Familiar
+Documentation=https://github.com/seu-usuario/avaliacao-encontro-noivos
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+
+# Diretório da aplicação (ajuste conforme necessário)
+WorkingDirectory=/var/www/avaliacao-encontro
+
+# Variáveis de ambiente
+Environment="NODE_ENV=production"
+Environment="PORT=3001"
+
+# Comando para iniciar a aplicação
+ExecStart=/usr/bin/node /var/www/avaliacao-encontro/dist/server/server/index.cjs
+
+# Reiniciar automaticamente em caso de falha
+Restart=always
+RestartSec=10
+
+# Limites de recursos
+LimitNOFILE=65536
+
+# Logs (systemd journalctl)
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=avaliacao-encontro
+
+# Segurança adicional
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

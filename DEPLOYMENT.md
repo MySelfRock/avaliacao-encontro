@@ -185,6 +185,22 @@ curl https://SEU-APP.onrender.com/api/pastoral/interessados > backup-interessado
 **Erro:** `Cannot find module...`
 - **Solução:** Verifique se todas as dependências estão em `dependencies` (não em `devDependencies`)
 
+### Erro: "exports is not defined in ES module scope"
+
+**Erro completo:**
+```
+ReferenceError: exports is not defined in ES module scope
+This file is being treated as an ES module because it has a '.js' file extension
+and '/opt/render/project/src/package.json' contains "type": "module"
+```
+
+**Causa:** O backend é compilado para CommonJS mas package.json tem `"type": "module"`
+
+**Solução:** ✅ Já resolvido! O projeto usa um script customizado (`scripts/build-backend.js`) que:
+1. Compila TypeScript para CommonJS
+2. Corrige imports para usar extensão `.cjs`
+3. Renomeia todos `.js` para `.cjs`
+
 ### Aplicação não inicia
 
 **Erro:** `Error: Cannot find module 'express'`
@@ -199,6 +215,15 @@ curl https://SEU-APP.onrender.com/api/pastoral/interessados > backup-interessado
 
 **Causa:** Servidor não está expondo as rotas corretamente
 - **Solução:** Verifique os logs no Render para mensagens de erro
+
+### Frontend retorna 404 ou JSON ao invés de HTML
+
+**Causa:** Static file middleware ou SPA fallback não configurado corretamente
+
+**Solução:** ✅ Já resolvido! O servidor agora:
+1. Serve arquivos estáticos (CSS, JS) com `express.static(..., { index: false })`
+2. Usa regex `/^\/(?!api\/).*\/` para servir index.html em rotas SPA
+3. Isso permite que `/`, `/estatisticas`, `/interessados` funcionem corretamente
 
 ## Custos
 

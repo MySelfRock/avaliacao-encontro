@@ -7,12 +7,12 @@
     "dev": "vite",
     "build": "npm run build:frontend && npm run build:backend",
     "build:frontend": "vite build",
-    "build:backend": "tsc server/index.ts server/database.ts --outDir dist/server --module commonjs --moduleResolution node --esModuleInterop true --skipLibCheck true --resolveJsonModule true",
+    "build:backend": "node scripts/build-backend.js",
     "preview": "vite preview",
     "server": "tsx server/index.ts",
     "server:watch": "tsx watch server/index.ts",
     "start": "concurrently \"npm run server:watch\" \"npm run dev\"",
-    "start:prod": "NODE_ENV=production node dist/server/server/index.js",
+    "start:prod": "NODE_ENV=production node dist/server/server/index.cjs",
     "init-db": "tsx -e \"import { initializeDatabase } from './server/database'; initializeDatabase();\""
   },
   "dependencies": {

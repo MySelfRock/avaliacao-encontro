@@ -22,7 +22,10 @@ app.use(express.json());
 
 // Servir arquivos estáticos do build do frontend em produção
 if (isProduction) {
-  app.use(express.static(path.join(__dirname, '../dist')));
+  const staticPath = path.join(__dirname, '../../');
+  // Servir arquivos estáticos (JS, CSS, imagens, etc.)
+  // index: false - não serve index.html automaticamente (faremos manualmente depois)
+  app.use(express.static(staticPath, { index: false }));
 }
 
 // Inicializar banco de dados
@@ -209,10 +212,12 @@ app.get('/api/contatos', (req, res) => {
   }
 });
 
-// Em produção, servir o frontend para todas as rotas que não sejam API
+// Em produção, servir o SPA para rotas não encontradas (HTML5 routing)
+// Isso permite que o React Router funcione com URLs diretas
 if (isProduction) {
-  app.get('*', (_req, res) => {
-    res.sendFile(path.join(__dirname, '../dist/index.html'));
+  // Fallback para SPA - serve index.html para todas as rotas GET que não sejam /api/*
+  app.get(/^\/(?!api\/).*/, (_req, res) => {
+    res.sendFile(path.join(__dirname, '../../index.html'));
   });
 } else {
   // Rota 404 apenas em desenvolvimento
