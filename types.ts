@@ -3,11 +3,35 @@ export type Rating = 0 | 1 | 2 | 3 | 4 | 5;
 
 export type PastoralInterest = 'sim' | 'talvez' | 'nao' | '';
 
+export type EncontroStatus = 'planejado' | 'em_andamento' | 'concluido' | 'cancelado';
+
+export interface Encontro {
+  id?: number;
+  nome: string;
+  descricao: string;
+  data_inicio: string;
+  data_fim: string;
+  local: string;
+  tema: string;
+  codigo_acesso: string; // Código único para o link público
+  status: EncontroStatus;
+  max_participantes?: number;
+  observacoes?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface EncontroWithStats extends Encontro {
+  total_avaliacoes: number;
+  media_geral: number;
+}
+
 export interface EvaluationData {
   basicInfo: {
     coupleName: string;
     encounterDate: string;
   };
+  encontroId?: number; // Vinculo com o encontro
   preEncontro: {
     communicationClarity: Rating;
     registrationEase: Rating;

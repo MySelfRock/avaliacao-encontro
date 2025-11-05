@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import path from 'path';
-import type { EvaluationData } from '../types';
+import type { EvaluationData, Encontro, EncontroStatus } from '../types';
+import { randomBytes } from 'crypto';
 
 const dbPath = path.join(process.cwd(), 'avaliacoes.db');
 const db = new Database(dbPath);
@@ -8,16 +9,42 @@ const db = new Database(dbPath);
 // Habilitar foreign keys
 db.pragma('foreign_keys = ON');
 
+// Função para gerar código único de acesso
+function generateCodigoAcesso(): string {
+  return randomBytes(8).toString('hex');
+}
+
 // Criar tabelas
 export function initializeDatabase() {
-  // Tabela principal de avaliações
+  // Tabela de encontros
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS encontros (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      nome TEXT NOT NULL,
+      descricao TEXT,
+      data_inicio TEXT NOT NULL,
+      data_fim TEXT NOT NULL,
+      local TEXT,
+      tema TEXT,
+      codigo_acesso TEXT UNIQUE NOT NULL,
+      status TEXT CHECK(status IN ('planejado', 'em_andamento', 'concluido', 'cancelado')) DEFAULT 'planejado',
+      max_participantes INTEGER,
+      observacoes TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  // Tabela principal de avaliações (atualizada com encontro_id)
   db.exec(`
     CREATE TABLE IF NOT EXISTS avaliacoes (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      encontro_id INTEGER,
       couple_name TEXT,
       encounter_date TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (encontro_id) REFERENCES encontros(id) ON DELETE SET NULL
     )
   `);
 
@@ -137,10 +164,11 @@ export function insertAvaliacao(data: EvaluationData): number {
   const transaction = db.transaction(() => {
     // Inserir informações básicas
     const insertAvaliacao = db.prepare(`
-      INSERT INTO avaliacoes (couple_name, encounter_date)
-      VALUES (?, ?)
+      INSERT INTO avaliacoes (encontro_id, couple_name, encounter_date)
+      VALUES (?, ?, ?)
     `);
     const result = insertAvaliacao.run(
+      data.encontroId || null,
       data.basicInfo.coupleName || null,
       data.basicInfo.encounterDate || null
     );
@@ -445,6 +473,223 @@ export function getAllAvaliacoesDetalhadas() {
       mensagemFinal,
     };
   });
+}
+
+// ========================================
+// FUNÇÕES PARA GERENCIAMENTO DE ENCONTROS
+// ========================================
+
+// Criar novo encontro
+export function createEncontro(encontro: Encontro): number {
+  const codigoAcesso = generateCodigoAcesso();
+
+  const stmt = db.prepare(`
+    INSERT INTO encontros (
+      nome, descricao, data_inicio, data_fim, local, tema,
+      codigo_acesso, status, max_participantes, observacoes
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  const result = stmt.run(
+    encontro.nome,
+    encontro.descricao || null,
+    encontro.data_inicio,
+    encontro.data_fim,
+    encontro.local || null,
+    encontro.tema || null,
+    codigoAcesso,
+    encontro.status || 'planejado',
+    encontro.max_participantes || null,
+    encontro.observacoes || null
+  );
+
+  return result.lastInsertRowid as number;
+}
+
+// Atualizar encontro
+export function updateEncontro(id: number, encontro: Partial<Encontro>): boolean {
+  const stmt = db.prepare(`
+    UPDATE encontros
+    SET nome = COALESCE(?, nome),
+        descricao = COALESCE(?, descricao),
+        data_inicio = COALESCE(?, data_inicio),
+        data_fim = COALESCE(?, data_fim),
+        local = COALESCE(?, local),
+        tema = COALESCE(?, tema),
+        status = COALESCE(?, status),
+        max_participantes = COALESCE(?, max_participantes),
+        observacoes = COALESCE(?, observacoes),
+        updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `);
+
+  const result = stmt.run(
+    encontro.nome || null,
+    encontro.descricao !== undefined ? encontro.descricao : null,
+    encontro.data_inicio || null,
+    encontro.data_fim || null,
+    encontro.local !== undefined ? encontro.local : null,
+    encontro.tema !== undefined ? encontro.tema : null,
+    encontro.status || null,
+    encontro.max_participantes !== undefined ? encontro.max_participantes : null,
+    encontro.observacoes !== undefined ? encontro.observacoes : null,
+    id
+  );
+
+  return result.changes > 0;
+}
+
+// Buscar todos os encontros
+export function getAllEncontros() {
+  const encontros = db.prepare(`
+    SELECT * FROM encontros
+    ORDER BY data_inicio DESC
+  `).all();
+
+  return encontros;
+}
+
+// Buscar todos os encontros com estatísticas
+export function getAllEncontrosWithStats() {
+  const encontros = db.prepare(`
+    SELECT
+      e.*,
+      COUNT(a.id) as total_avaliacoes,
+      COALESCE(AVG(ag.overall_rating), 0) as media_geral
+    FROM encontros e
+    LEFT JOIN avaliacoes a ON e.id = a.encontro_id
+    LEFT JOIN avaliacao_geral ag ON a.id = ag.avaliacao_id
+    GROUP BY e.id
+    ORDER BY e.data_inicio DESC
+  `).all();
+
+  return encontros;
+}
+
+// Buscar encontro por ID
+export function getEncontroById(id: number) {
+  const encontro = db.prepare('SELECT * FROM encontros WHERE id = ?').get(id);
+  return encontro;
+}
+
+// Buscar encontro por código de acesso
+export function getEncontroByCodigo(codigo: string) {
+  const encontro = db.prepare('SELECT * FROM encontros WHERE codigo_acesso = ?').get(codigo);
+  return encontro;
+}
+
+// Deletar encontro
+export function deleteEncontro(id: number): boolean {
+  const stmt = db.prepare('DELETE FROM encontros WHERE id = ?');
+  const result = stmt.run(id);
+  return result.changes > 0;
+}
+
+// Obter estatísticas de um encontro específico
+export function getEstatisticasEncontro(encontroId: number) {
+  const totalAvaliacoes = db.prepare(
+    'SELECT COUNT(*) as total FROM avaliacoes WHERE encontro_id = ?'
+  ).get(encontroId) as { total: number };
+
+  const mediaPreEncontro = db.prepare(`
+    SELECT
+      AVG(communication_clarity) as avg_communication,
+      AVG(registration_ease) as avg_registration
+    FROM pre_encontro pe
+    JOIN avaliacoes a ON pe.avaliacao_id = a.id
+    WHERE a.encontro_id = ?
+  `).get(encontroId);
+
+  const mediaPalestras = db.prepare(`
+    SELECT
+      AVG(relevance) as avg_relevance,
+      AVG(clarity) as avg_clarity,
+      AVG(duration) as avg_duration
+    FROM palestras p
+    JOIN avaliacoes a ON p.avaliacao_id = a.id
+    WHERE a.encontro_id = ?
+  `).get(encontroId);
+
+  const mediaAmbientes = db.prepare(`
+    SELECT
+      AVG(comfort) as avg_comfort,
+      AVG(cleanliness) as avg_cleanliness,
+      AVG(decoration) as avg_decoration
+    FROM ambientes amb
+    JOIN avaliacoes a ON amb.avaliacao_id = a.id
+    WHERE a.encontro_id = ?
+  `).get(encontroId);
+
+  const mediaRefeicoes = db.prepare(`
+    SELECT
+      AVG(quality) as avg_quality,
+      AVG(organization) as avg_organization
+    FROM refeicoes r
+    JOIN avaliacoes a ON r.avaliacao_id = a.id
+    WHERE a.encontro_id = ?
+  `).get(encontroId);
+
+  const mediaMusicas = db.prepare(`
+    SELECT
+      AVG(suitability) as avg_suitability,
+      AVG(quality) as avg_quality
+    FROM musicas m
+    JOIN avaliacoes a ON m.avaliacao_id = a.id
+    WHERE a.encontro_id = ?
+  `).get(encontroId);
+
+  const mediaEquipe = db.prepare(`
+    SELECT
+      AVG(availability) as avg_availability,
+      AVG(organization) as avg_organization
+    FROM equipe eq
+    JOIN avaliacoes a ON eq.avaliacao_id = a.id
+    WHERE a.encontro_id = ?
+  `).get(encontroId);
+
+  const mediaAvaliacaoGeral = db.prepare(`
+    SELECT
+      AVG(expectations) as avg_expectations,
+      AVG(overall_rating) as avg_overall,
+      AVG(recommendation) as avg_recommendation
+    FROM avaliacao_geral ag
+    JOIN avaliacoes a ON ag.avaliacao_id = a.id
+    WHERE a.encontro_id = ?
+  `).get(encontroId);
+
+  const interestePastoral = db.prepare(`
+    SELECT
+      p.interest,
+      COUNT(*) as count
+    FROM pastoral p
+    JOIN avaliacoes a ON p.avaliacao_id = a.id
+    WHERE a.encontro_id = ?
+    GROUP BY p.interest
+  `).all(encontroId);
+
+  return {
+    totalAvaliacoes: totalAvaliacoes.total,
+    mediaPreEncontro,
+    mediaPalestras,
+    mediaAmbientes,
+    mediaRefeicoes,
+    mediaMusicas,
+    mediaEquipe,
+    mediaAvaliacaoGeral,
+    interestePastoral,
+  };
+}
+
+// Buscar avaliações de um encontro específico
+export function getAvaliacoesByEncontro(encontroId: number) {
+  const avaliacoes = db.prepare(`
+    SELECT * FROM avaliacoes
+    WHERE encontro_id = ?
+    ORDER BY created_at DESC
+  `).all(encontroId);
+
+  return avaliacoes;
 }
 
 export default db;

@@ -8,9 +8,18 @@ import {
   getAvaliacaoById,
   getEstatisticas,
   getInteressadosPastoral,
-  getTodosContatos
+  getTodosContatos,
+  createEncontro,
+  updateEncontro,
+  getAllEncontros,
+  getAllEncontrosWithStats,
+  getEncontroById,
+  getEncontroByCodigo,
+  deleteEncontro,
+  getEstatisticasEncontro,
+  getAvaliacoesByEncontro
 } from './database';
-import type { EvaluationData } from '../types';
+import type { EvaluationData, Encontro } from '../types';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -207,6 +216,255 @@ app.get('/api/contatos', (req, res) => {
     console.error('❌ Erro ao buscar contatos:', error);
     res.status(500).json({
       error: 'Erro ao buscar contatos',
+      message: error instanceof Error ? error.message : 'Erro desconhecido'
+    });
+  }
+});
+
+// ========================================
+// ROTAS DE GERENCIAMENTO DE ENCONTROS
+// ========================================
+
+// POST - Criar novo encontro
+app.post('/api/encontros', (req, res) => {
+  try {
+    const encontro: Encontro = req.body;
+
+    // Validação básica
+    if (!encontro.nome || !encontro.data_inicio || !encontro.data_fim) {
+      return res.status(400).json({
+        error: 'Dados inválidos',
+        message: 'Nome, data de início e data de fim são obrigatórios'
+      });
+    }
+
+    const encontroId = createEncontro(encontro);
+    const novoEncontro = getEncontroById(encontroId) as Encontro | undefined;
+
+    console.log(`✅ Novo encontro criado com ID: ${encontroId}`);
+    console.log(`   Nome: ${encontro.nome}`);
+    console.log(`   Código de acesso: ${novoEncontro?.codigo_acesso}`);
+
+    res.status(201).json({
+      success: true,
+      message: 'Encontro criado com sucesso!',
+      data: novoEncontro
+    });
+  } catch (error) {
+    console.error('❌ Erro ao criar encontro:', error);
+    res.status(500).json({
+      error: 'Erro ao criar encontro',
+      message: error instanceof Error ? error.message : 'Erro desconhecido'
+    });
+  }
+});
+
+// GET - Listar todos os encontros
+app.get('/api/encontros', (req, res) => {
+  try {
+    const withStats = req.query.stats === 'true';
+    const encontros = withStats ? getAllEncontrosWithStats() : getAllEncontros();
+
+    res.json({
+      success: true,
+      total: encontros.length,
+      data: encontros
+    });
+  } catch (error) {
+    console.error('❌ Erro ao buscar encontros:', error);
+    res.status(500).json({
+      error: 'Erro ao buscar encontros',
+      message: error instanceof Error ? error.message : 'Erro desconhecido'
+    });
+  }
+});
+
+// GET - Buscar encontro por ID
+app.get('/api/encontros/:id', (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+
+    if (isNaN(id)) {
+      return res.status(400).json({
+        error: 'ID inválido',
+        message: 'O ID deve ser um número'
+      });
+    }
+
+    const encontro = getEncontroById(id);
+
+    if (!encontro) {
+      return res.status(404).json({
+        error: 'Encontro não encontrado',
+        message: `Nenhum encontro encontrado com ID ${id}`
+      });
+    }
+
+    res.json({
+      success: true,
+      data: encontro
+    });
+  } catch (error) {
+    console.error('❌ Erro ao buscar encontro:', error);
+    res.status(500).json({
+      error: 'Erro ao buscar encontro',
+      message: error instanceof Error ? error.message : 'Erro desconhecido'
+    });
+  }
+});
+
+// GET - Buscar encontro por código de acesso
+app.get('/api/encontros/codigo/:codigo', (req, res) => {
+  try {
+    const codigo = req.params.codigo;
+    const encontro = getEncontroByCodigo(codigo);
+
+    if (!encontro) {
+      return res.status(404).json({
+        error: 'Encontro não encontrado',
+        message: `Nenhum encontro encontrado com o código ${codigo}`
+      });
+    }
+
+    res.json({
+      success: true,
+      data: encontro
+    });
+  } catch (error) {
+    console.error('❌ Erro ao buscar encontro por código:', error);
+    res.status(500).json({
+      error: 'Erro ao buscar encontro',
+      message: error instanceof Error ? error.message : 'Erro desconhecido'
+    });
+  }
+});
+
+// PUT - Atualizar encontro
+app.put('/api/encontros/:id', (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+
+    if (isNaN(id)) {
+      return res.status(400).json({
+        error: 'ID inválido',
+        message: 'O ID deve ser um número'
+      });
+    }
+
+    const encontro: Partial<Encontro> = req.body;
+    const success = updateEncontro(id, encontro);
+
+    if (!success) {
+      return res.status(404).json({
+        error: 'Encontro não encontrado',
+        message: `Nenhum encontro encontrado com ID ${id}`
+      });
+    }
+
+    const encontroAtualizado = getEncontroById(id);
+
+    console.log(`✅ Encontro ${id} atualizado com sucesso`);
+
+    res.json({
+      success: true,
+      message: 'Encontro atualizado com sucesso!',
+      data: encontroAtualizado
+    });
+  } catch (error) {
+    console.error('❌ Erro ao atualizar encontro:', error);
+    res.status(500).json({
+      error: 'Erro ao atualizar encontro',
+      message: error instanceof Error ? error.message : 'Erro desconhecido'
+    });
+  }
+});
+
+// DELETE - Deletar encontro
+app.delete('/api/encontros/:id', (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+
+    if (isNaN(id)) {
+      return res.status(400).json({
+        error: 'ID inválido',
+        message: 'O ID deve ser um número'
+      });
+    }
+
+    const success = deleteEncontro(id);
+
+    if (!success) {
+      return res.status(404).json({
+        error: 'Encontro não encontrado',
+        message: `Nenhum encontro encontrado com ID ${id}`
+      });
+    }
+
+    console.log(`✅ Encontro ${id} deletado com sucesso`);
+
+    res.json({
+      success: true,
+      message: 'Encontro deletado com sucesso!'
+    });
+  } catch (error) {
+    console.error('❌ Erro ao deletar encontro:', error);
+    res.status(500).json({
+      error: 'Erro ao deletar encontro',
+      message: error instanceof Error ? error.message : 'Erro desconhecido'
+    });
+  }
+});
+
+// GET - Obter estatísticas de um encontro específico
+app.get('/api/encontros/:id/estatisticas', (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+
+    if (isNaN(id)) {
+      return res.status(400).json({
+        error: 'ID inválido',
+        message: 'O ID deve ser um número'
+      });
+    }
+
+    const stats = getEstatisticasEncontro(id);
+
+    res.json({
+      success: true,
+      data: stats
+    });
+  } catch (error) {
+    console.error('❌ Erro ao buscar estatísticas do encontro:', error);
+    res.status(500).json({
+      error: 'Erro ao buscar estatísticas',
+      message: error instanceof Error ? error.message : 'Erro desconhecido'
+    });
+  }
+});
+
+// GET - Buscar avaliações de um encontro específico
+app.get('/api/encontros/:id/avaliacoes', (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+
+    if (isNaN(id)) {
+      return res.status(400).json({
+        error: 'ID inválido',
+        message: 'O ID deve ser um número'
+      });
+    }
+
+    const avaliacoes = getAvaliacoesByEncontro(id);
+
+    res.json({
+      success: true,
+      total: avaliacoes.length,
+      data: avaliacoes
+    });
+  } catch (error) {
+    console.error('❌ Erro ao buscar avaliações do encontro:', error);
+    res.status(500).json({
+      error: 'Erro ao buscar avaliações',
       message: error instanceof Error ? error.message : 'Erro desconhecido'
     });
   }

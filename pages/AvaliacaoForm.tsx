@@ -1,5 +1,6 @@
-import React, { useState, useCallback } from "react";
-import type { EvaluationData, Rating, PastoralInterest } from "../types";
+import React, { useState, useCallback, useEffect } from "react";
+import { useParams } from "react-router-dom";
+import type { EvaluationData, Rating, PastoralInterest, Encontro } from "../types";
 import { StarRating } from "../components/StarRating";
 import { SectionCard } from "../components/SectionCard";
 import { QuestionGroup } from "../components/QuestionGroup";
@@ -8,6 +9,7 @@ import { API_ENDPOINTS } from "../config/api";
 
 const initialFormData: EvaluationData = {
   basicInfo: { coupleName: "", encounterDate: "" },
+  encontroId: undefined,
   preEncontro: { communicationClarity: 0, registrationEase: 0, comments: "" },
   duranteEncontro: {
     palestras: { relevance: 0, clarity: 0, duration: 0, comments: "" },
@@ -29,9 +31,47 @@ const initialFormData: EvaluationData = {
 };
 
 export function AvaliacaoForm() {
+  const { codigo } = useParams<{ codigo?: string }>();
   const [formData, setFormData] = useState<EvaluationData>(initialFormData);
+  const [encontro, setEncontro] = useState<Encontro | null>(null);
+  const [isLoadingEncontro, setIsLoadingEncontro] = useState(!!codigo);
+  const [encontroError, setEncontroError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isSubmitted, setIsSubmitted] = useState(false);
+
+  useEffect(() => {
+    if (codigo) {
+      fetchEncontro(codigo);
+    }
+  }, [codigo]);
+
+  const fetchEncontro = async (codigoAcesso: string) => {
+    try {
+      setIsLoadingEncontro(true);
+      const response = await fetch(`${API_ENDPOINTS.encontros}/codigo/${codigoAcesso}`);
+
+      if (!response.ok) {
+        throw new Error('Encontro não encontrado');
+      }
+
+      const result = await response.json();
+      setEncontro(result.data);
+      setFormData((prev) => ({
+        ...prev,
+        encontroId: result.data.id,
+        basicInfo: {
+          ...prev.basicInfo,
+          encounterDate: result.data.data_inicio
+        }
+      }));
+      setEncontroError(null);
+    } catch (err) {
+      setEncontroError(err instanceof Error ? err.message : 'Erro ao buscar encontro');
+      console.error('Erro ao buscar encontro:', err);
+    } finally {
+      setIsLoadingEncontro(false);
+    }
+  };
 
   // Handler para avaliações simples (preEncontro)
   const handleSimpleRatingChange = useCallback(
@@ -172,6 +212,37 @@ export function AvaliacaoForm() {
     }
   };
 
+  if (isLoadingEncontro) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-pastoral-blue-50 to-blue-50 p-4">
+        <div className="bg-white p-10 rounded-2xl shadow-2xl text-center max-w-lg">
+          <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-pastoral-blue-600 mb-4"></div>
+          <p className="text-gray-600">Carregando informações do encontro...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (encontroError) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-pastoral-blue-50 to-blue-50 p-4">
+        <div className="bg-white p-10 rounded-2xl shadow-2xl text-center max-w-lg border-t-4 border-red-500">
+          <div className="w-20 h-20 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-6">
+            <svg className="w-12 h-12 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </div>
+          <h1 className="text-2xl font-bold text-red-700 mb-4">
+            Encontro não encontrado
+          </h1>
+          <p className="text-gray-600">
+            O código do encontro informado não foi encontrado ou está inválido.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   if (isSubmitted) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-pastoral-blue-50 to-blue-50 p-4">
@@ -218,6 +289,36 @@ export function AvaliacaoForm() {
           <div className="inline-block bg-gradient-to-r from-pastoral-blue-500 to-pastoral-blue-600 text-white px-6 py-2 rounded-full text-sm font-semibold mb-4 shadow-md">
             Pastoral Familiar
           </div>
+
+          {encontro && (
+            <div className="bg-white rounded-xl shadow-lg p-6 mb-6 border-l-4 border-pastoral-blue-600">
+              <h2 className="text-2xl font-bold text-pastoral-blue-800 mb-2">
+                {encontro.nome}
+              </h2>
+              {encontro.descricao && (
+                <p className="text-gray-600 mb-2">{encontro.descricao}</p>
+              )}
+              <div className="flex items-center justify-center gap-4 text-sm text-gray-600">
+                {encontro.local && (
+                  <span className="flex items-center gap-1">
+                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M5.05 4.05a7 7 0 119.9 9.9L10 18.9l-4.95-4.95a7 7 0 010-9.9zM10 11a2 2 0 100-4 2 2 0 000 4z" clipRule="evenodd" />
+                    </svg>
+                    {encontro.local}
+                  </span>
+                )}
+                {encontro.tema && (
+                  <span className="flex items-center gap-1">
+                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                      <path d="M9 4.804A7.968 7.968 0 005.5 4c-1.255 0-2.443.29-3.5.804v10A7.969 7.969 0 015.5 14c1.669 0 3.218.51 4.5 1.385A7.962 7.962 0 0114.5 14c1.255 0 2.443.29 3.5.804v-10A7.968 7.968 0 0014.5 4c-1.255 0-2.443.29-3.5.804V12a1 1 0 11-2 0V4.804z" />
+                    </svg>
+                    {encontro.tema}
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+
           <h1 className="text-4xl sm:text-5xl font-bold bg-gradient-to-r from-pastoral-blue-700 to-pastoral-blue-500 bg-clip-text text-transparent mb-4">
             Avaliação do Encontro de Noivos
           </h1>
