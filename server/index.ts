@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import path from 'path';
+import * as dotenv from 'dotenv';
 import {
   initializeDatabase,
   migrateDatabase,
@@ -28,6 +29,9 @@ import {
   getAvaliacoesByEncontro
 } from './database';
 import type { EvaluationData, Encontro } from '../types';
+
+// Carregar variáveis de ambiente
+dotenv.config();
 
 // Estender o tipo Request do Express para incluir a pastoral
 declare global {
@@ -97,6 +101,31 @@ app.use((req, res, next) => {
   next();
 });
 
+// Middleware de Autenticação Admin
+// Protege rotas /api/admin com token Bearer
+const authMiddleware = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  const authHeader = req.headers.authorization;
+  const token = authHeader?.replace('Bearer ', '');
+
+  const adminToken = process.env.ADMIN_TOKEN;
+
+  // Se não há token configurado, permitir acesso (útil em dev)
+  if (!adminToken) {
+    console.warn('⚠️  ADMIN_TOKEN não configurado - rotas admin desprotegidas!');
+    return next();
+  }
+
+  if (token !== adminToken) {
+    console.warn('🔒 Tentativa de acesso não autorizado às rotas admin');
+    return res.status(401).json({
+      error: 'Não autorizado',
+      message: 'Token de autenticação inválido ou ausente'
+    });
+  }
+
+  next();
+};
+
 // Rota de teste
 app.get('/api/health', (req, res) => {
   res.json({
@@ -144,12 +173,14 @@ app.post('/api/avaliacoes', (req, res) => {
 // GET - Listar todas as avaliações (resumo)
 app.get('/api/avaliacoes', (req, res) => {
   try {
-    const avaliacoes = getAllAvaliacoes();
+    const pastoralId = req.pastoral?.id;
+    const avaliacoes = getAllAvaliacoes(pastoralId);
 
     res.json({
       success: true,
       total: avaliacoes.length,
-      data: avaliacoes
+      data: avaliacoes,
+      pastoral: req.pastoral?.name
     });
   } catch (error) {
     console.error('❌ Erro ao buscar avaliações:', error);
@@ -186,6 +217,7 @@ app.get('/api/avaliacoes', (req, res) => {
 app.get('/api/avaliacoes/:id', (req, res) => {
   try {
     const id = parseInt(req.params.id);
+    const pastoralId = req.pastoral?.id;
 
     if (isNaN(id)) {
       return res.status(400).json({
@@ -194,7 +226,7 @@ app.get('/api/avaliacoes/:id', (req, res) => {
       });
     }
 
-    const avaliacao = getAvaliacaoById(id);
+    const avaliacao = getAvaliacaoById(id, pastoralId);
 
     if (!avaliacao) {
       return res.status(404).json({
@@ -219,11 +251,13 @@ app.get('/api/avaliacoes/:id', (req, res) => {
 // GET - Obter estatísticas das avaliações
 app.get('/api/estatisticas', (req, res) => {
   try {
-    const stats = getEstatisticas();
+    const pastoralId = req.pastoral?.id;
+    const stats = getEstatisticas(pastoralId);
 
     res.json({
       success: true,
-      data: stats
+      data: stats,
+      pastoral: req.pastoral?.name
     });
   } catch (error) {
     console.error('❌ Erro ao buscar estatísticas:', error);
@@ -237,7 +271,8 @@ app.get('/api/estatisticas', (req, res) => {
 // GET - Buscar interessados na Pastoral Familiar (com contato)
 app.get('/api/pastoral/interessados', (req, res) => {
   try {
-    const interessados = getInteressadosPastoral();
+    const pastoralId = req.pastoral?.id;
+    const interessados = getInteressadosPastoral(pastoralId);
 
     console.log(`📋 Buscando interessados na Pastoral: ${interessados.length} encontrado(s)`);
 
@@ -259,7 +294,8 @@ app.get('/api/pastoral/interessados', (req, res) => {
 // GET - Buscar todos os contatos (independente do interesse)
 app.get('/api/contatos', (req, res) => {
   try {
-    const contatos = getTodosContatos();
+    const pastoralId = req.pastoral?.id;
+    const contatos = getTodosContatos(pastoralId);
 
     console.log(`📞 Buscando todos os contatos: ${contatos.length} encontrado(s)`);
 
@@ -574,7 +610,7 @@ app.get('/api/config', (req, res) => {
 });
 
 // GET - Listar todas as pastorais (Admin)
-app.get('/api/admin/pastorais', (req, res) => {
+app.get('/api/admin/pastorais', authMiddleware, (req, res) => {
   try {
     const pastorais = getAllPastorais();
 
@@ -593,7 +629,7 @@ app.get('/api/admin/pastorais', (req, res) => {
 });
 
 // GET - Buscar pastoral por ID (Admin)
-app.get('/api/admin/pastorais/:id', (req, res) => {
+app.get('/api/admin/pastorais/:id', authMiddleware, (req, res) => {
   try {
     const id = parseInt(req.params.id);
 
@@ -627,7 +663,7 @@ app.get('/api/admin/pastorais/:id', (req, res) => {
 });
 
 // POST - Criar nova pastoral (Admin)
-app.post('/api/admin/pastorais', (req, res) => {
+app.post('/api/admin/pastorais', authMiddleware, (req, res) => {
   try {
     const { name, subdomain, logoUrl, config } = req.body;
 
@@ -674,7 +710,7 @@ app.post('/api/admin/pastorais', (req, res) => {
 });
 
 // PUT - Atualizar pastoral (Admin)
-app.put('/api/admin/pastorais/:id', (req, res) => {
+app.put('/api/admin/pastorais/:id', authMiddleware, (req, res) => {
   try {
     const id = parseInt(req.params.id);
     const { name, subdomain, logoUrl, config } = req.body;
@@ -724,7 +760,7 @@ app.put('/api/admin/pastorais/:id', (req, res) => {
 });
 
 // PUT - Atualizar configuração da pastoral (Admin)
-app.put('/api/admin/pastorais/:id/config', (req, res) => {
+app.put('/api/admin/pastorais/:id/config', authMiddleware, (req, res) => {
   try {
     const id = parseInt(req.params.id);
     const { config } = req.body;
@@ -770,7 +806,7 @@ app.put('/api/admin/pastorais/:id/config', (req, res) => {
 });
 
 // DELETE - Excluir pastoral (Admin)
-app.delete('/api/admin/pastorais/:id', (req, res) => {
+app.delete('/api/admin/pastorais/:id', authMiddleware, (req, res) => {
   try {
     const id = parseInt(req.params.id);
 

@@ -220,6 +220,16 @@ export function migrateDatabase() {
       } else {
         console.log('✅ Banco de dados já está atualizado');
       }
+
+      // Verificar se a coluna encontro_id existe na tabela avaliacoes
+      const avaliacoesTableInfo = db.prepare("PRAGMA table_info(avaliacoes)").all() as any[];
+      const hasEncontroId = avaliacoesTableInfo.some((col: any) => col.name === 'encontro_id');
+
+      if (!hasEncontroId) {
+        console.log('🔄 Adicionando coluna encontro_id à tabela avaliacoes...');
+        db.exec(`ALTER TABLE avaliacoes ADD COLUMN encontro_id INTEGER REFERENCES encontros(id) ON DELETE SET NULL`);
+        console.log('✅ Coluna encontro_id adicionada à tabela avaliacoes');
+      }
     } else {
       console.log('✅ Banco de dados novo - nenhuma migração necessária');
     }
