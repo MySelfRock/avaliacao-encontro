@@ -16,9 +16,18 @@ import {
   createPastoral,
   updatePastoral,
   updatePastoralConfig,
-  deletePastoral
+  deletePastoral,
+  createEncontro,
+  updateEncontro,
+  getAllEncontros,
+  getAllEncontrosWithStats,
+  getEncontroById,
+  getEncontroByCodigo,
+  deleteEncontro,
+  getEstatisticasEncontro,
+  getAvaliacoesByEncontro
 } from './database';
-import type { EvaluationData } from '../types';
+import type { EvaluationData, Encontro } from '../types';
 
 // Estender o tipo Request do Express para incluir a pastoral
 declare global {
@@ -101,7 +110,6 @@ app.get('/api/health', (req, res) => {
 app.post('/api/avaliacoes', (req, res) => {
   try {
     const data: EvaluationData = req.body;
-    const pastoralId = req.pastoral?.id;
 
     // Validação básica
     if (!data) {
@@ -111,17 +119,9 @@ app.post('/api/avaliacoes', (req, res) => {
       });
     }
 
-    if (!pastoralId) {
-      return res.status(400).json({
-        error: 'Pastoral não identificada',
-        message: 'Não foi possível identificar a pastoral'
-      });
-    }
-
-    const avaliacaoId = insertAvaliacao(data, pastoralId);
+    const avaliacaoId = insertAvaliacao(data);
 
     console.log(`✅ Nova avaliação criada com ID: ${avaliacaoId}`);
-    console.log(`   Pastoral: ${req.pastoral.name}`);
     console.log(`   Casal: ${data.basicInfo.coupleName || 'Anônimo'}`);
     console.log(`   Data do encontro: ${data.basicInfo.encounterDate || 'Não informada'}`);
     console.log(`   Nota geral: ${data.posEncontro.geral.overallRating} estrelas`);
@@ -144,14 +144,12 @@ app.post('/api/avaliacoes', (req, res) => {
 // GET - Listar todas as avaliações (resumo)
 app.get('/api/avaliacoes', (req, res) => {
   try {
-    const pastoralId = req.pastoral?.id;
-    const avaliacoes = getAllAvaliacoes(pastoralId);
+    const avaliacoes = getAllAvaliacoes();
 
     res.json({
       success: true,
       total: avaliacoes.length,
-      data: avaliacoes,
-      pastoral: req.pastoral?.name
+      data: avaliacoes
     });
   } catch (error) {
     console.error('❌ Erro ao buscar avaliações:', error);
@@ -188,7 +186,6 @@ app.get('/api/avaliacoes', (req, res) => {
 app.get('/api/avaliacoes/:id', (req, res) => {
   try {
     const id = parseInt(req.params.id);
-    const pastoralId = req.pastoral?.id;
 
     if (isNaN(id)) {
       return res.status(400).json({
@@ -197,7 +194,7 @@ app.get('/api/avaliacoes/:id', (req, res) => {
       });
     }
 
-    const avaliacao = getAvaliacaoById(id, pastoralId);
+    const avaliacao = getAvaliacaoById(id);
 
     if (!avaliacao) {
       return res.status(404).json({
@@ -222,13 +219,11 @@ app.get('/api/avaliacoes/:id', (req, res) => {
 // GET - Obter estatísticas das avaliações
 app.get('/api/estatisticas', (req, res) => {
   try {
-    const pastoralId = req.pastoral?.id;
-    const stats = getEstatisticas(pastoralId);
+    const stats = getEstatisticas();
 
     res.json({
       success: true,
-      data: stats,
-      pastoral: req.pastoral?.name
+      data: stats
     });
   } catch (error) {
     console.error('❌ Erro ao buscar estatísticas:', error);
@@ -242,8 +237,7 @@ app.get('/api/estatisticas', (req, res) => {
 // GET - Buscar interessados na Pastoral Familiar (com contato)
 app.get('/api/pastoral/interessados', (req, res) => {
   try {
-    const pastoralId = req.pastoral?.id;
-    const interessados = getInteressadosPastoral(pastoralId);
+    const interessados = getInteressadosPastoral();
 
     console.log(`📋 Buscando interessados na Pastoral: ${interessados.length} encontrado(s)`);
 
@@ -265,8 +259,7 @@ app.get('/api/pastoral/interessados', (req, res) => {
 // GET - Buscar todos os contatos (independente do interesse)
 app.get('/api/contatos', (req, res) => {
   try {
-    const pastoralId = req.pastoral?.id;
-    const contatos = getTodosContatos(pastoralId);
+    const contatos = getTodosContatos();
 
     console.log(`📞 Buscando todos os contatos: ${contatos.length} encontrado(s)`);
 
@@ -285,7 +278,269 @@ app.get('/api/contatos', (req, res) => {
   }
 });
 
-// ================== ROTAS DE ADMINISTRAÇÃO DE PASTORAIS ==================
+// ========================================
+// ROTAS DE GERENCIAMENTO DE ENCONTROS
+// ========================================
+
+// POST - Criar novo encontro
+app.post('/api/encontros', (req, res) => {
+  try {
+    const encontro: Encontro = req.body;
+    const pastoralId = req.pastoral?.id;
+
+    // Validação básica
+    if (!encontro.nome || !encontro.data_inicio || !encontro.data_fim) {
+      return res.status(400).json({
+        error: 'Dados inválidos',
+        message: 'Nome, data de início e data de fim são obrigatórios'
+      });
+    }
+
+    if (!pastoralId) {
+      return res.status(400).json({
+        error: 'Pastoral não identificada',
+        message: 'Não foi possível identificar a pastoral'
+      });
+    }
+
+    const encontroId = createEncontro(encontro, pastoralId);
+    const novoEncontro = getEncontroById(encontroId, pastoralId) as Encontro | undefined;
+
+    console.log(`✅ Novo encontro criado com ID: ${encontroId}`);
+    console.log(`   Nome: ${encontro.nome}`);
+    console.log(`   Pastoral: ${req.pastoral.name}`);
+    console.log(`   Código de acesso: ${novoEncontro?.codigo_acesso}`);
+
+    res.status(201).json({
+      success: true,
+      message: 'Encontro criado com sucesso!',
+      data: novoEncontro
+    });
+  } catch (error) {
+    console.error('❌ Erro ao criar encontro:', error);
+    res.status(500).json({
+      error: 'Erro ao criar encontro',
+      message: error instanceof Error ? error.message : 'Erro desconhecido'
+    });
+  }
+});
+
+// GET - Listar todos os encontros
+app.get('/api/encontros', (req, res) => {
+  try {
+    const pastoralId = req.pastoral?.id;
+    const withStats = req.query.stats === 'true';
+    const encontros = withStats ? getAllEncontrosWithStats(pastoralId) : getAllEncontros(pastoralId);
+
+    res.json({
+      success: true,
+      total: encontros.length,
+      data: encontros
+    });
+  } catch (error) {
+    console.error('❌ Erro ao buscar encontros:', error);
+    res.status(500).json({
+      error: 'Erro ao buscar encontros',
+      message: error instanceof Error ? error.message : 'Erro desconhecido'
+    });
+  }
+});
+
+// GET - Buscar encontro por ID
+app.get('/api/encontros/:id', (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const pastoralId = req.pastoral?.id;
+
+    if (isNaN(id)) {
+      return res.status(400).json({
+        error: 'ID inválido',
+        message: 'O ID deve ser um número'
+      });
+    }
+
+    const encontro = getEncontroById(id, pastoralId);
+
+    if (!encontro) {
+      return res.status(404).json({
+        error: 'Encontro não encontrado',
+        message: `Nenhum encontro encontrado com ID ${id}`
+      });
+    }
+
+    res.json({
+      success: true,
+      data: encontro
+    });
+  } catch (error) {
+    console.error('❌ Erro ao buscar encontro:', error);
+    res.status(500).json({
+      error: 'Erro ao buscar encontro',
+      message: error instanceof Error ? error.message : 'Erro desconhecido'
+    });
+  }
+});
+
+// GET - Buscar encontro por código de acesso
+app.get('/api/encontros/codigo/:codigo', (req, res) => {
+  try {
+    const codigo = req.params.codigo;
+    const encontro = getEncontroByCodigo(codigo);
+
+    if (!encontro) {
+      return res.status(404).json({
+        error: 'Encontro não encontrado',
+        message: `Nenhum encontro encontrado com o código ${codigo}`
+      });
+    }
+
+    res.json({
+      success: true,
+      data: encontro
+    });
+  } catch (error) {
+    console.error('❌ Erro ao buscar encontro por código:', error);
+    res.status(500).json({
+      error: 'Erro ao buscar encontro',
+      message: error instanceof Error ? error.message : 'Erro desconhecido'
+    });
+  }
+});
+
+// PUT - Atualizar encontro
+app.put('/api/encontros/:id', (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+
+    if (isNaN(id)) {
+      return res.status(400).json({
+        error: 'ID inválido',
+        message: 'O ID deve ser um número'
+      });
+    }
+
+    const encontro: Partial<Encontro> = req.body;
+    const success = updateEncontro(id, encontro);
+
+    if (!success) {
+      return res.status(404).json({
+        error: 'Encontro não encontrado',
+        message: `Nenhum encontro encontrado com ID ${id}`
+      });
+    }
+
+    const encontroAtualizado = getEncontroById(id);
+
+    console.log(`✅ Encontro ${id} atualizado com sucesso`);
+
+    res.json({
+      success: true,
+      message: 'Encontro atualizado com sucesso!',
+      data: encontroAtualizado
+    });
+  } catch (error) {
+    console.error('❌ Erro ao atualizar encontro:', error);
+    res.status(500).json({
+      error: 'Erro ao atualizar encontro',
+      message: error instanceof Error ? error.message : 'Erro desconhecido'
+    });
+  }
+});
+
+// DELETE - Deletar encontro
+app.delete('/api/encontros/:id', (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+
+    if (isNaN(id)) {
+      return res.status(400).json({
+        error: 'ID inválido',
+        message: 'O ID deve ser um número'
+      });
+    }
+
+    const success = deleteEncontro(id);
+
+    if (!success) {
+      return res.status(404).json({
+        error: 'Encontro não encontrado',
+        message: `Nenhum encontro encontrado com ID ${id}`
+      });
+    }
+
+    console.log(`✅ Encontro ${id} deletado com sucesso`);
+
+    res.json({
+      success: true,
+      message: 'Encontro deletado com sucesso!'
+    });
+  } catch (error) {
+    console.error('❌ Erro ao deletar encontro:', error);
+    res.status(500).json({
+      error: 'Erro ao deletar encontro',
+      message: error instanceof Error ? error.message : 'Erro desconhecido'
+    });
+  }
+});
+
+// GET - Obter estatísticas de um encontro específico
+app.get('/api/encontros/:id/estatisticas', (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+
+    if (isNaN(id)) {
+      return res.status(400).json({
+        error: 'ID inválido',
+        message: 'O ID deve ser um número'
+      });
+    }
+
+    const stats = getEstatisticasEncontro(id);
+
+    res.json({
+      success: true,
+      data: stats
+    });
+  } catch (error) {
+    console.error('❌ Erro ao buscar estatísticas do encontro:', error);
+    res.status(500).json({
+      error: 'Erro ao buscar estatísticas',
+      message: error instanceof Error ? error.message : 'Erro desconhecido'
+    });
+  }
+});
+
+// GET - Buscar avaliações de um encontro específico
+app.get('/api/encontros/:id/avaliacoes', (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+
+    if (isNaN(id)) {
+      return res.status(400).json({
+        error: 'ID inválido',
+        message: 'O ID deve ser um número'
+      });
+    }
+
+    const avaliacoes = getAvaliacoesByEncontro(id);
+
+    res.json({
+      success: true,
+      total: avaliacoes.length,
+      data: avaliacoes
+    });
+  } catch (error) {
+    console.error('❌ Erro ao buscar avaliações do encontro:', error);
+    res.status(500).json({
+      error: 'Erro ao buscar avaliações',
+      message: error instanceof Error ? error.message : 'Erro desconhecido'
+    });
+  }
+});
+
+// ========================================
+// ROTAS DE ADMINISTRAÇÃO DE PASTORAIS
+// ========================================
 
 // GET - Obter configuração da pastoral atual
 app.get('/api/config', (req, res) => {
@@ -560,7 +815,9 @@ app.delete('/api/admin/pastorais/:id', (req, res) => {
   }
 });
 
-// ================== FIM DAS ROTAS DE ADMINISTRAÇÃO ==================
+// ========================================
+// FIM DAS ROTAS
+// ========================================
 
 // Em produção, servir o SPA para rotas não encontradas (HTML5 routing)
 // Isso permite que o React Router funcione com URLs diretas

@@ -14,4 +14,5 @@ export const API_ENDPOINTS = {
   estatisticas: `${API_BASE_URL}/api/estatisticas`,
   interessados: `${API_BASE_URL}/api/pastoral/interessados`,
   contatos: `${API_BASE_URL}/api/contatos`,
+  encontros: `${API_BASE_URL}/api/encontros`,
 };
