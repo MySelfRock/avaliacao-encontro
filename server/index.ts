@@ -49,15 +49,29 @@ import {
   type AuditLog
 } from './database';
 import type { EvaluationData, Encontro } from '../types';
+import {
+  authenticateUser,
+  verifyToken,
+  getUserFromToken,
+  hashPassword,
+  validatePassword,
+  validateEmail
+} from './auth';
 
 // Carregar variáveis de ambiente
 dotenv.config();
 
-// Estender o tipo Request do Express para incluir a pastoral
+// Estender o tipo Request do Express para incluir a pastoral e o user
 declare global {
   namespace Express {
     interface Request {
       pastoral?: any;
+      user?: {
+        userId: number;
+        email: string;
+        role: 'super_admin' | 'pastoral_admin';
+        pastoralId?: number | null;
+      };
     }
   }
 }
@@ -242,25 +256,131 @@ app.use((req, res, next) => {
   next();
 });
 
-// Middleware de Autenticação Admin
-// Protege rotas /api/admin com token Bearer
+// ========================================
+// MIDDLEWARES DE AUTENTICAÇÃO E AUTORIZAÇÃO
+// ========================================
+
+/**
+ * Middleware de Autenticação JWT
+ * Valida o token JWT e injeta os dados do usuário em req.user
+ */
 const authMiddleware = (req: express.Request, res: express.Response, next: express.NextFunction) => {
   const authHeader = req.headers.authorization;
   const token = authHeader?.replace('Bearer ', '');
 
-  const adminToken = process.env.ADMIN_TOKEN;
+  if (!token) {
+    console.warn('🔒 Tentativa de acesso sem token');
+    return res.status(401).json({
+      error: 'Não autorizado',
+      message: 'Token de autenticação não fornecido'
+    });
+  }
 
-  // Se não há token configurado, permitir acesso (útil em dev)
-  if (!adminToken) {
-    console.warn('⚠️  ADMIN_TOKEN não configurado - rotas admin desprotegidas!');
+  const payload = verifyToken(token);
+
+  if (!payload) {
+    console.warn('🔒 Tentativa de acesso com token inválido');
+    return res.status(401).json({
+      error: 'Não autorizado',
+      message: 'Token inválido ou expirado'
+    });
+  }
+
+  // Verificar se usuário está ativo
+  const user = getUserById(payload.userId);
+
+  if (!user || !user.is_active) {
+    console.warn(`🔒 Usuário inativo tentou acessar: ${payload.email}`);
+    return res.status(403).json({
+      error: 'Acesso negado',
+      message: 'Usuário desativado. Entre em contato com o administrador.'
+    });
+  }
+
+  // Injetar dados do usuário no request
+  req.user = {
+    userId: payload.userId,
+    email: payload.email,
+    role: payload.role,
+    pastoralId: payload.pastoralId
+  };
+
+  next();
+};
+
+/**
+ * Middleware para verificar roles permitidas
+ * Uso: requireRole('super_admin') ou requireRole('super_admin', 'pastoral_admin')
+ */
+const requireRole = (...allowedRoles: Array<'super_admin' | 'pastoral_admin'>) => {
+  return (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (!req.user) {
+      return res.status(401).json({
+        error: 'Não autorizado',
+        message: 'Usuário não autenticado'
+      });
+    }
+
+    if (!allowedRoles.includes(req.user.role)) {
+      console.warn(`🔒 Acesso negado: ${req.user.email} (${req.user.role}) tentou acessar rota de ${allowedRoles.join(', ')}`);
+      return res.status(403).json({
+        error: 'Acesso negado',
+        message: 'Você não tem permissão para acessar este recurso'
+      });
+    }
+
+    next();
+  };
+};
+
+/**
+ * Middleware para verificar se usuário pode acessar recurso da pastoral
+ * Super admin pode acessar tudo
+ * Pastoral admin só pode acessar sua própria pastoral
+ */
+const requireOwnPastoral = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (!req.user) {
+    return res.status(401).json({
+      error: 'Não autorizado',
+      message: 'Usuário não autenticado'
+    });
+  }
+
+  // Super admin pode acessar qualquer pastoral
+  if (req.user.role === 'super_admin') {
     return next();
   }
 
-  if (token !== adminToken) {
-    console.warn('🔒 Tentativa de acesso não autorizado às rotas admin');
-    return res.status(401).json({
-      error: 'Não autorizado',
-      message: 'Token de autenticação inválido ou ausente'
+  // Pastoral admin só pode acessar sua própria pastoral
+  if (req.user.role === 'pastoral_admin') {
+    if (!req.pastoral || req.pastoral.id !== req.user.pastoralId) {
+      console.warn(`🔒 ${req.user.email} tentou acessar pastoral diferente da sua`);
+      return res.status(403).json({
+        error: 'Acesso negado',
+        message: 'Você não tem permissão para acessar esta pastoral'
+      });
+    }
+  }
+
+  next();
+};
+
+/**
+ * Middleware para verificar se a pastoral está ativa
+ */
+const checkPastoralActive = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  // Super admin não é bloqueado
+  if (req.user?.role === 'super_admin') {
+    return next();
+  }
+
+  // Verificar se pastoral está ativa
+  if (req.pastoral && !req.pastoral.is_active) {
+    console.warn(`🔒 Tentativa de acesso a pastoral bloqueada: ${req.pastoral.name}`);
+    return res.status(403).json({
+      error: 'Pastoral bloqueada',
+      message: req.pastoral.blocked_reason || 'Esta pastoral está temporariamente desabilitada. Entre em contato com o suporte.',
+      blockedAt: req.pastoral.blocked_at
     });
   }
 
@@ -275,6 +395,572 @@ app.get('/api/health', (req, res) => {
     timestamp: new Date().toISOString()
   });
 });
+
+// ========================================
+// ROTAS DE AUTENTICAÇÃO
+// ========================================
+
+// POST /api/auth/login - Login de usuários
+app.post('/api/auth/login', (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    // Validações
+    if (!email || !password) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email e senha são obrigatórios'
+      });
+    }
+
+    if (!validateEmail(email)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email inválido'
+      });
+    }
+
+    // Autenticar usuário
+    const result = authenticateUser(email, password);
+
+    if (!result.success) {
+      // Log de tentativa de login falha
+      console.warn(`⚠️  Tentativa de login falhou: ${email}`);
+
+      return res.status(401).json({
+        success: false,
+        message: result.message
+      });
+    }
+
+    // Log de sucesso
+    console.log(`✅ Login bem-sucedido: ${result.user?.email} (${result.user?.role})`);
+
+    // Criar log de auditoria
+    if (result.user) {
+      createAuditLog({
+        user_id: result.user.id,
+        pastoral_id: result.user.pastoralId || null,
+        action: 'login',
+        resource_type: 'auth',
+        ip_address: req.ip || req.socket.remoteAddress,
+        user_agent: req.headers['user-agent']
+      });
+    }
+
+    res.json(result);
+  } catch (error) {
+    console.error('❌ Erro no login:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erro interno no servidor'
+    });
+  }
+});
+
+// GET /api/auth/me - Obter dados do usuário logado
+app.get('/api/auth/me', (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    const token = authHeader?.replace('Bearer ', '');
+
+    if (!token) {
+      return res.status(401).json({
+        success: false,
+        message: 'Token não fornecido'
+      });
+    }
+
+    const user = getUserFromToken(token);
+
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: 'Token inválido ou expirado'
+      });
+    }
+
+    // Retornar dados do usuário (sem password_hash)
+    res.json({
+      success: true,
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        role: user.role,
+        pastoralId: user.pastoral_id,
+        isActive: user.is_active,
+        lastLogin: user.last_login
+      }
+    });
+  } catch (error) {
+    console.error('❌ Erro ao obter usuário:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erro interno no servidor'
+    });
+  }
+});
+
+// POST /api/auth/logout - Logout (opcional, JWT é stateless)
+app.post('/api/auth/logout', (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    const token = authHeader?.replace('Bearer ', '');
+
+    if (token) {
+      const payload = verifyToken(token);
+      if (payload) {
+        // Criar log de auditoria
+        createAuditLog({
+          user_id: payload.userId,
+          pastoral_id: payload.pastoralId || null,
+          action: 'logout',
+          resource_type: 'auth',
+          ip_address: req.ip || req.socket.remoteAddress,
+          user_agent: req.headers['user-agent']
+        });
+
+        console.log(`✅ Logout: ${payload.email}`);
+      }
+    }
+
+    res.json({
+      success: true,
+      message: 'Logout realizado com sucesso'
+    });
+  } catch (error) {
+    console.error('❌ Erro no logout:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erro interno no servidor'
+    });
+  }
+});
+
+// ========================================
+// ROTAS DE GERENCIAMENTO DE USUÁRIOS (SUPER ADMIN)
+// ========================================
+
+// POST /api/admin/users - Criar novo usuário (admin de pastoral)
+app.post('/api/admin/users',
+  authMiddleware,
+  requireRole('super_admin'),
+  adminLimiter,
+  (req, res) => {
+    try {
+      const { email, password, name, role, pastoralId } = req.body;
+
+      // Validações
+      if (!email || !password || !name || !role) {
+        return res.status(400).json({
+          success: false,
+          message: 'Email, senha, nome e role são obrigatórios'
+        });
+      }
+
+      if (!validateEmail(email)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Email inválido'
+        });
+      }
+
+      const passwordValidation = validatePassword(password);
+      if (!passwordValidation.valid) {
+        return res.status(400).json({
+          success: false,
+          message: passwordValidation.message
+        });
+      }
+
+      if (role !== 'super_admin' && role !== 'pastoral_admin') {
+        return res.status(400).json({
+          success: false,
+          message: 'Role deve ser "super_admin" ou "pastoral_admin"'
+        });
+      }
+
+      // Se é pastoral_admin, precisa de pastoralId
+      if (role === 'pastoral_admin' && !pastoralId) {
+        return res.status(400).json({
+          success: false,
+          message: 'pastoralId é obrigatório para pastoral_admin'
+        });
+      }
+
+      // Verificar se email já existe
+      const existingUser = getUserByEmail(email);
+      if (existingUser) {
+        return res.status(409).json({
+          success: false,
+          message: 'Já existe um usuário com este email'
+        });
+      }
+
+      // Verificar se pastoral existe (se for pastoral_admin)
+      if (role === 'pastoral_admin') {
+        const pastoral = getPastoralById(pastoralId);
+        if (!pastoral) {
+          return res.status(404).json({
+            success: false,
+            message: 'Pastoral não encontrada'
+          });
+        }
+      }
+
+      // Criar usuário
+      const passwordHash = hashPassword(password);
+      const userId = createUser({
+        email,
+        password_hash: passwordHash,
+        name,
+        role,
+        pastoral_id: role === 'pastoral_admin' ? pastoralId : null,
+        is_active: true
+      });
+
+      // Log de auditoria
+      createAuditLog({
+        user_id: req.user!.userId,
+        pastoral_id: role === 'pastoral_admin' ? pastoralId : null,
+        action: 'create_user',
+        resource_type: 'user',
+        resource_id: userId,
+        details: JSON.stringify({ email, name, role }),
+        ip_address: req.ip || req.socket.remoteAddress,
+        user_agent: req.headers['user-agent']
+      });
+
+      console.log(`✅ Novo usuário criado: ${email} (${role}) por ${req.user!.email}`);
+
+      res.status(201).json({
+        success: true,
+        message: 'Usuário criado com sucesso',
+        userId
+      });
+    } catch (error) {
+      console.error('❌ Erro ao criar usuário:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Erro interno no servidor'
+      });
+    }
+  }
+);
+
+// GET /api/admin/users - Listar todos os usuários
+app.get('/api/admin/users',
+  authMiddleware,
+  requireRole('super_admin'),
+  (req, res) => {
+    try {
+      const users = getAllUsers();
+
+      // Remover password_hash de todos os usuários
+      const safeUsers = users.map(user => ({
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        role: user.role,
+        pastoralId: user.pastoral_id,
+        isActive: user.is_active,
+        createdAt: user.created_at,
+        lastLogin: user.last_login
+      }));
+
+      res.json({
+        success: true,
+        total: safeUsers.length,
+        users: safeUsers
+      });
+    } catch (error) {
+      console.error('❌ Erro ao listar usuários:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Erro interno no servidor'
+      });
+    }
+  }
+);
+
+// PUT /api/admin/users/:id - Atualizar usuário
+app.put('/api/admin/users/:id',
+  authMiddleware,
+  requireRole('super_admin'),
+  adminLimiter,
+  (req, res) => {
+    try {
+      const userId = parseInt(req.params.id);
+      const { name, email, isActive, pastoralId } = req.body;
+
+      if (isNaN(userId)) {
+        return res.status(400).json({
+          success: false,
+          message: 'ID de usuário inválido'
+        });
+      }
+
+      const user = getUserById(userId);
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          message: 'Usuário não encontrado'
+        });
+      }
+
+      // Atualizar usuário
+      updateUser(userId, {
+        name: name !== undefined ? name : user.name,
+        email: email !== undefined ? email : user.email,
+        is_active: isActive !== undefined ? isActive : user.is_active,
+        pastoral_id: pastoralId !== undefined ? pastoralId : user.pastoral_id
+      });
+
+      // Log de auditoria
+      createAuditLog({
+        user_id: req.user!.userId,
+        pastoral_id: user.pastoral_id || null,
+        action: 'update_user',
+        resource_type: 'user',
+        resource_id: userId,
+        details: JSON.stringify({ name, email, isActive }),
+        ip_address: req.ip || req.socket.remoteAddress,
+        user_agent: req.headers['user-agent']
+      });
+
+      console.log(`✅ Usuário ${userId} atualizado por ${req.user!.email}`);
+
+      res.json({
+        success: true,
+        message: 'Usuário atualizado com sucesso'
+      });
+    } catch (error) {
+      console.error('❌ Erro ao atualizar usuário:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Erro interno no servidor'
+      });
+    }
+  }
+);
+
+// PUT /api/admin/pastorais/:id/block - Bloquear pastoral
+app.put('/api/admin/pastorais/:id/block',
+  authMiddleware,
+  requireRole('super_admin'),
+  adminLimiter,
+  (req, res) => {
+    try {
+      const pastoralId = parseInt(req.params.id);
+      const { reason } = req.body;
+
+      if (isNaN(pastoralId)) {
+        return res.status(400).json({
+          success: false,
+          message: 'ID de pastoral inválido'
+        });
+      }
+
+      if (!reason) {
+        return res.status(400).json({
+          success: false,
+          message: 'Motivo do bloqueio é obrigatório'
+        });
+      }
+
+      const pastoral = getPastoralById(pastoralId);
+      if (!pastoral) {
+        return res.status(404).json({
+          success: false,
+          message: 'Pastoral não encontrada'
+        });
+      }
+
+      blockPastoral(pastoralId, reason);
+
+      // Log de auditoria
+      createAuditLog({
+        user_id: req.user!.userId,
+        pastoral_id: pastoralId,
+        action: 'block_pastoral',
+        resource_type: 'pastoral',
+        resource_id: pastoralId,
+        details: JSON.stringify({ reason }),
+        ip_address: req.ip || req.socket.remoteAddress,
+        user_agent: req.headers['user-agent']
+      });
+
+      console.log(`✅ Pastoral ${pastoral.name} bloqueada por ${req.user!.email}: ${reason}`);
+
+      res.json({
+        success: true,
+        message: 'Pastoral bloqueada com sucesso'
+      });
+    } catch (error) {
+      console.error('❌ Erro ao bloquear pastoral:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Erro interno no servidor'
+      });
+    }
+  }
+);
+
+// PUT /api/admin/pastorais/:id/unblock - Desbloquear pastoral
+app.put('/api/admin/pastorais/:id/unblock',
+  authMiddleware,
+  requireRole('super_admin'),
+  adminLimiter,
+  (req, res) => {
+    try {
+      const pastoralId = parseInt(req.params.id);
+
+      if (isNaN(pastoralId)) {
+        return res.status(400).json({
+          success: false,
+          message: 'ID de pastoral inválido'
+        });
+      }
+
+      const pastoral = getPastoralById(pastoralId);
+      if (!pastoral) {
+        return res.status(404).json({
+          success: false,
+          message: 'Pastoral não encontrada'
+        });
+      }
+
+      unblockPastoral(pastoralId);
+
+      // Log de auditoria
+      createAuditLog({
+        user_id: req.user!.userId,
+        pastoral_id: pastoralId,
+        action: 'unblock_pastoral',
+        resource_type: 'pastoral',
+        resource_id: pastoralId,
+        ip_address: req.ip || req.socket.remoteAddress,
+        user_agent: req.headers['user-agent']
+      });
+
+      console.log(`✅ Pastoral ${pastoral.name} desbloqueada por ${req.user!.email}`);
+
+      res.json({
+        success: true,
+        message: 'Pastoral desbloqueada com sucesso'
+      });
+    } catch (error) {
+      console.error('❌ Erro ao desbloquear pastoral:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Erro interno no servidor'
+      });
+    }
+  }
+);
+
+// GET /api/admin/audit-logs - Ver logs de auditoria
+app.get('/api/admin/audit-logs',
+  authMiddleware,
+  requireRole('super_admin'),
+  (req, res) => {
+    try {
+      const { userId, pastoralId, limit = 100, offset = 0 } = req.query;
+
+      const logs = getAuditLogs({
+        userId: userId ? parseInt(userId as string) : undefined,
+        pastoralId: pastoralId ? parseInt(pastoralId as string) : undefined,
+        limit: parseInt(limit as string),
+        offset: parseInt(offset as string)
+      });
+
+      res.json({
+        success: true,
+        total: logs.length,
+        logs
+      });
+    } catch (error) {
+      console.error('❌ Erro ao buscar logs de auditoria:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Erro interno no servidor'
+      });
+    }
+  }
+);
+
+// PUT /api/auth/change-password - Trocar própria senha
+app.put('/api/auth/change-password',
+  authMiddleware,
+  (req, res) => {
+    try {
+      const { currentPassword, newPassword } = req.body;
+
+      if (!currentPassword || !newPassword) {
+        return res.status(400).json({
+          success: false,
+          message: 'Senha atual e nova senha são obrigatórias'
+        });
+      }
+
+      const passwordValidation = validatePassword(newPassword);
+      if (!passwordValidation.valid) {
+        return res.status(400).json({
+          success: false,
+          message: passwordValidation.message
+        });
+      }
+
+      const user = getUserById(req.user!.userId);
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          message: 'Usuário não encontrado'
+        });
+      }
+
+      // Verificar senha atual
+      const { verifyPassword } = require('./auth');
+      if (!verifyPassword(currentPassword, user.password_hash!)) {
+        return res.status(401).json({
+          success: false,
+          message: 'Senha atual incorreta'
+        });
+      }
+
+      // Atualizar senha
+      const newPasswordHash = hashPassword(newPassword);
+      updateUser(req.user!.userId, {
+        password_hash: newPasswordHash
+      });
+
+      // Log de auditoria
+      createAuditLog({
+        user_id: req.user!.userId,
+        pastoral_id: req.user!.pastoralId || null,
+        action: 'change_password',
+        resource_type: 'user',
+        resource_id: req.user!.userId,
+        ip_address: req.ip || req.socket.remoteAddress,
+        user_agent: req.headers['user-agent']
+      });
+
+      console.log(`✅ ${req.user!.email} trocou sua senha`);
+
+      res.json({
+        success: true,
+        message: 'Senha alterada com sucesso'
+      });
+    } catch (error) {
+      console.error('❌ Erro ao trocar senha:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Erro interno no servidor'
+      });
+    }
+  }
+);
 
 // POST - Criar nova avaliação
 app.post('/api/avaliacoes', writeLimiter, (req, res) => {
@@ -312,7 +998,12 @@ app.post('/api/avaliacoes', writeLimiter, (req, res) => {
 });
 
 // GET - Listar todas as avaliações (resumo)
-app.get('/api/avaliacoes', (req, res) => {
+app.get('/api/avaliacoes',
+  authMiddleware,
+  requireRole('super_admin', 'pastoral_admin'),
+  requireOwnPastoral,
+  checkPastoralActive,
+  (req, res) => {
   try {
     const pastoralId = req.pastoral?.id;
     const avaliacoes = getAllAvaliacoes(pastoralId);
@@ -355,7 +1046,12 @@ app.get('/api/avaliacoes', (req, res) => {
 // });
 
 // GET - Buscar avaliação específica por ID (completa)
-app.get('/api/avaliacoes/:id', (req, res) => {
+app.get('/api/avaliacoes/:id',
+  authMiddleware,
+  requireRole('super_admin', 'pastoral_admin'),
+  requireOwnPastoral,
+  checkPastoralActive,
+  (req, res) => {
   try {
     const id = parseInt(req.params.id);
     const pastoralId = req.pastoral?.id;
@@ -390,7 +1086,12 @@ app.get('/api/avaliacoes/:id', (req, res) => {
 });
 
 // GET - Obter estatísticas das avaliações
-app.get('/api/estatisticas', (req, res) => {
+app.get('/api/estatisticas',
+  authMiddleware,
+  requireRole('super_admin', 'pastoral_admin'),
+  requireOwnPastoral,
+  checkPastoralActive,
+  (req, res) => {
   try {
     const pastoralId = req.pastoral?.id;
     const stats = getEstatisticas(pastoralId);
@@ -410,7 +1111,12 @@ app.get('/api/estatisticas', (req, res) => {
 });
 
 // GET - Buscar interessados na Pastoral Familiar (com contato)
-app.get('/api/pastoral/interessados', (req, res) => {
+app.get('/api/pastoral/interessados',
+  authMiddleware,
+  requireRole('super_admin', 'pastoral_admin'),
+  requireOwnPastoral,
+  checkPastoralActive,
+  (req, res) => {
   try {
     const pastoralId = req.pastoral?.id;
     const interessados = getInteressadosPastoral(pastoralId);
@@ -433,7 +1139,12 @@ app.get('/api/pastoral/interessados', (req, res) => {
 });
 
 // GET - Buscar todos os contatos (independente do interesse)
-app.get('/api/contatos', (req, res) => {
+app.get('/api/contatos',
+  authMiddleware,
+  requireRole('super_admin', 'pastoral_admin'),
+  requireOwnPastoral,
+  checkPastoralActive,
+  (req, res) => {
   try {
     const pastoralId = req.pastoral?.id;
     const contatos = getTodosContatos(pastoralId);
@@ -460,7 +1171,13 @@ app.get('/api/contatos', (req, res) => {
 // ========================================
 
 // POST - Criar novo encontro
-app.post('/api/encontros', writeLimiter, (req, res) => {
+app.post('/api/encontros',
+  authMiddleware,
+  requireRole('super_admin', 'pastoral_admin'),
+  requireOwnPastoral,
+  checkPastoralActive,
+  writeLimiter,
+  (req, res) => {
   try {
     const encontro: Encontro = req.body;
     const pastoralId = req.pastoral?.id;
@@ -503,7 +1220,12 @@ app.post('/api/encontros', writeLimiter, (req, res) => {
 });
 
 // GET - Listar todos os encontros
-app.get('/api/encontros', (req, res) => {
+app.get('/api/encontros',
+  authMiddleware,
+  requireRole('super_admin', 'pastoral_admin'),
+  requireOwnPastoral,
+  checkPastoralActive,
+  (req, res) => {
   try {
     const pastoralId = req.pastoral?.id;
     const withStats = req.query.stats === 'true';
@@ -524,7 +1246,12 @@ app.get('/api/encontros', (req, res) => {
 });
 
 // GET - Buscar encontro por ID
-app.get('/api/encontros/:id', (req, res) => {
+app.get('/api/encontros/:id',
+  authMiddleware,
+  requireRole('super_admin', 'pastoral_admin'),
+  requireOwnPastoral,
+  checkPastoralActive,
+  (req, res) => {
   try {
     const id = parseInt(req.params.id);
     const pastoralId = req.pastoral?.id;
@@ -585,7 +1312,13 @@ app.get('/api/encontros/codigo/:codigo', (req, res) => {
 });
 
 // PUT - Atualizar encontro
-app.put('/api/encontros/:id', writeLimiter, (req, res) => {
+app.put('/api/encontros/:id',
+  authMiddleware,
+  requireRole('super_admin', 'pastoral_admin'),
+  requireOwnPastoral,
+  checkPastoralActive,
+  writeLimiter,
+  (req, res) => {
   try {
     const id = parseInt(req.params.id);
 
@@ -625,7 +1358,13 @@ app.put('/api/encontros/:id', writeLimiter, (req, res) => {
 });
 
 // DELETE - Deletar encontro
-app.delete('/api/encontros/:id', writeLimiter, (req, res) => {
+app.delete('/api/encontros/:id',
+  authMiddleware,
+  requireRole('super_admin', 'pastoral_admin'),
+  requireOwnPastoral,
+  checkPastoralActive,
+  writeLimiter,
+  (req, res) => {
   try {
     const id = parseInt(req.params.id);
 
@@ -661,7 +1400,12 @@ app.delete('/api/encontros/:id', writeLimiter, (req, res) => {
 });
 
 // GET - Obter estatísticas de um encontro específico
-app.get('/api/encontros/:id/estatisticas', (req, res) => {
+app.get('/api/encontros/:id/estatisticas',
+  authMiddleware,
+  requireRole('super_admin', 'pastoral_admin'),
+  requireOwnPastoral,
+  checkPastoralActive,
+  (req, res) => {
   try {
     const id = parseInt(req.params.id);
 
@@ -688,7 +1432,12 @@ app.get('/api/encontros/:id/estatisticas', (req, res) => {
 });
 
 // GET - Buscar avaliações de um encontro específico
-app.get('/api/encontros/:id/avaliacoes', (req, res) => {
+app.get('/api/encontros/:id/avaliacoes',
+  authMiddleware,
+  requireRole('super_admin', 'pastoral_admin'),
+  requireOwnPastoral,
+  checkPastoralActive,
+  (req, res) => {
   try {
     const id = parseInt(req.params.id);
 
@@ -751,7 +1500,10 @@ app.get('/api/config', (req, res) => {
 });
 
 // GET - Listar todas as pastorais (Admin)
-app.get('/api/admin/pastorais', authMiddleware, (req, res) => {
+app.get('/api/admin/pastorais',
+  authMiddleware,
+  requireRole('super_admin'),
+  (req, res) => {
   try {
     const pastorais = getAllPastorais();
 
@@ -770,7 +1522,10 @@ app.get('/api/admin/pastorais', authMiddleware, (req, res) => {
 });
 
 // GET - Buscar pastoral por ID (Admin)
-app.get('/api/admin/pastorais/:id', authMiddleware, (req, res) => {
+app.get('/api/admin/pastorais/:id',
+  authMiddleware,
+  requireRole('super_admin'),
+  (req, res) => {
   try {
     const id = parseInt(req.params.id);
 
@@ -804,7 +1559,11 @@ app.get('/api/admin/pastorais/:id', authMiddleware, (req, res) => {
 });
 
 // POST - Criar nova pastoral (Admin)
-app.post('/api/admin/pastorais', adminLimiter, authMiddleware, (req, res) => {
+app.post('/api/admin/pastorais',
+  authMiddleware,
+  requireRole('super_admin'),
+  adminLimiter,
+  (req, res) => {
   try {
     const { name, subdomain, logoUrl, config } = req.body;
 
@@ -851,7 +1610,11 @@ app.post('/api/admin/pastorais', adminLimiter, authMiddleware, (req, res) => {
 });
 
 // PUT - Atualizar pastoral (Admin)
-app.put('/api/admin/pastorais/:id', adminLimiter, authMiddleware, (req, res) => {
+app.put('/api/admin/pastorais/:id',
+  authMiddleware,
+  requireRole('super_admin'),
+  adminLimiter,
+  (req, res) => {
   try {
     const id = parseInt(req.params.id);
     const { name, subdomain, logoUrl, config } = req.body;
@@ -901,7 +1664,11 @@ app.put('/api/admin/pastorais/:id', adminLimiter, authMiddleware, (req, res) => 
 });
 
 // PUT - Atualizar configuração da pastoral (Admin)
-app.put('/api/admin/pastorais/:id/config', adminLimiter, authMiddleware, (req, res) => {
+app.put('/api/admin/pastorais/:id/config',
+  authMiddleware,
+  requireRole('super_admin'),
+  adminLimiter,
+  (req, res) => {
   try {
     const id = parseInt(req.params.id);
     const { config } = req.body;
@@ -947,7 +1714,11 @@ app.put('/api/admin/pastorais/:id/config', adminLimiter, authMiddleware, (req, r
 });
 
 // DELETE - Excluir pastoral (Admin)
-app.delete('/api/admin/pastorais/:id', adminLimiter, authMiddleware, (req, res) => {
+app.delete('/api/admin/pastorais/:id',
+  authMiddleware,
+  requireRole('super_admin'),
+  adminLimiter,
+  (req, res) => {
   try {
     const id = parseInt(req.params.id);
 

@@ -1,9 +1,9 @@
-import jwt from 'jsonwebtoken';
+import jwt, { type SignOptions } from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import { getUserByEmail, getUserById, updateUserLastLogin, type User } from './database';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
-const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d'; // 7 dias por padrão
+const JWT_SECRET: string = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
+const JWT_EXPIRES_IN: string = process.env.JWT_EXPIRES_IN || '7d'; // 7 dias por padrão
 
 export interface TokenPayload {
   userId: number;
@@ -53,7 +53,7 @@ export function generateToken(user: User): string {
 
   return jwt.sign(payload, JWT_SECRET, {
     expiresIn: JWT_EXPIRES_IN
-  });
+  } as SignOptions);
 }
 
 /**
