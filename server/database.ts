@@ -10,14 +10,28 @@ db.pragma('foreign_keys = ON');
 
 // Criar tabelas
 export function initializeDatabase() {
+  // Tabela de pastorais (multi-tenant)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS pastorais (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      subdomain TEXT UNIQUE NOT NULL,
+      logo_url TEXT,
+      config TEXT DEFAULT '{}',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
   // Tabela principal de avaliações
   db.exec(`
     CREATE TABLE IF NOT EXISTS avaliacoes (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      pastoral_id INTEGER NOT NULL,
       couple_name TEXT,
       encounter_date TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (pastoral_id) REFERENCES pastorais(id) ON DELETE CASCADE
     )
   `);
 
@@ -132,15 +146,190 @@ export function initializeDatabase() {
   console.log('✅ Banco de dados inicializado com sucesso!');
 }
 
+// Função para migrar banco existente (adicionar pastoral_id se não existir)
+export function migrateDatabase() {
+  try {
+    // Verificar se a coluna pastoral_id já existe na tabela avaliacoes
+    const tableInfo = db.prepare("PRAGMA table_info(avaliacoes)").all() as any[];
+    const hasPastoralId = tableInfo.some((col: any) => col.name === 'pastoral_id');
+
+    if (!hasPastoralId) {
+      console.log('🔄 Iniciando migração do banco de dados...');
+
+      // Criar pastoral padrão se não existir
+      const defaultPastoral = db.prepare('SELECT * FROM pastorais WHERE subdomain = ?').get('default');
+      let pastoralId: number;
+
+      if (!defaultPastoral) {
+        const result = db.prepare(`
+          INSERT INTO pastorais (name, subdomain, config)
+          VALUES (?, ?, ?)
+        `).run('Paróquia São Benedito', 'default', JSON.stringify({
+          primaryColor: '#1e40af',
+          secondaryColor: '#3b82f6',
+          logoUrl: '',
+          welcomeMessage: 'Bem-vindo ao Sistema de Avaliação do Encontro de Noivos'
+        }));
+        pastoralId = result.lastInsertRowid as number;
+        console.log('✅ Pastoral padrão criada com ID:', pastoralId);
+      } else {
+        pastoralId = (defaultPastoral as any).id;
+        console.log('✅ Pastoral padrão já existe com ID:', pastoralId);
+      }
+
+      // Adicionar coluna pastoral_id à tabela avaliacoes
+      db.exec(`
+        ALTER TABLE avaliacoes ADD COLUMN pastoral_id INTEGER;
+      `);
+      console.log('✅ Coluna pastoral_id adicionada à tabela avaliacoes');
+
+      // Atualizar todas as avaliações existentes com o ID da pastoral padrão
+      db.prepare('UPDATE avaliacoes SET pastoral_id = ?').run(pastoralId);
+      console.log('✅ Avaliações existentes vinculadas à pastoral padrão');
+
+      console.log('✅ Migração concluída com sucesso!');
+    } else {
+      console.log('✅ Banco de dados já está atualizado');
+    }
+  } catch (error) {
+    console.error('❌ Erro durante a migração:', error);
+    throw error;
+  }
+}
+
+// Funções de gerenciamento de pastorais
+
+export function createPastoral(data: {
+  name: string;
+  subdomain: string;
+  logoUrl?: string;
+  config?: any;
+}) {
+  const insert = db.prepare(`
+    INSERT INTO pastorais (name, subdomain, logo_url, config)
+    VALUES (?, ?, ?, ?)
+  `);
+
+  const result = insert.run(
+    data.name,
+    data.subdomain,
+    data.logoUrl || null,
+    JSON.stringify(data.config || {})
+  );
+
+  return result.lastInsertRowid;
+}
+
+export function getPastoralBySubdomain(subdomain: string) {
+  const pastoral = db.prepare('SELECT * FROM pastorais WHERE subdomain = ?').get(subdomain) as any;
+
+  if (pastoral && pastoral.config) {
+    try {
+      pastoral.config = JSON.parse(pastoral.config);
+    } catch (e) {
+      pastoral.config = {};
+    }
+  }
+
+  return pastoral;
+}
+
+export function getPastoralById(id: number) {
+  const pastoral = db.prepare('SELECT * FROM pastorais WHERE id = ?').get(id) as any;
+
+  if (pastoral && pastoral.config) {
+    try {
+      pastoral.config = JSON.parse(pastoral.config);
+    } catch (e) {
+      pastoral.config = {};
+    }
+  }
+
+  return pastoral;
+}
+
+export function getAllPastorais() {
+  const pastorais = db.prepare('SELECT * FROM pastorais ORDER BY created_at DESC').all() as any[];
+
+  return pastorais.map(pastoral => {
+    if (pastoral.config) {
+      try {
+        pastoral.config = JSON.parse(pastoral.config);
+      } catch (e) {
+        pastoral.config = {};
+      }
+    }
+    return pastoral;
+  });
+}
+
+export function updatePastoralConfig(id: number, config: any) {
+  const update = db.prepare(`
+    UPDATE pastorais
+    SET config = ?
+    WHERE id = ?
+  `);
+
+  return update.run(JSON.stringify(config), id);
+}
+
+export function updatePastoral(id: number, data: {
+  name?: string;
+  subdomain?: string;
+  logoUrl?: string;
+  config?: any;
+}) {
+  const fields: string[] = [];
+  const values: any[] = [];
+
+  if (data.name !== undefined) {
+    fields.push('name = ?');
+    values.push(data.name);
+  }
+
+  if (data.subdomain !== undefined) {
+    fields.push('subdomain = ?');
+    values.push(data.subdomain);
+  }
+
+  if (data.logoUrl !== undefined) {
+    fields.push('logo_url = ?');
+    values.push(data.logoUrl);
+  }
+
+  if (data.config !== undefined) {
+    fields.push('config = ?');
+    values.push(JSON.stringify(data.config));
+  }
+
+  if (fields.length === 0) return;
+
+  values.push(id);
+
+  const update = db.prepare(`
+    UPDATE pastorais
+    SET ${fields.join(', ')}
+    WHERE id = ?
+  `);
+
+  return update.run(...values);
+}
+
+export function deletePastoral(id: number) {
+  const del = db.prepare('DELETE FROM pastorais WHERE id = ?');
+  return del.run(id);
+}
+
 // Função para inserir uma nova avaliação
-export function insertAvaliacao(data: EvaluationData): number {
+export function insertAvaliacao(data: EvaluationData, pastoralId: number): number {
   const transaction = db.transaction(() => {
     // Inserir informações básicas
     const insertAvaliacao = db.prepare(`
-      INSERT INTO avaliacoes (couple_name, encounter_date)
-      VALUES (?, ?)
+      INSERT INTO avaliacoes (pastoral_id, couple_name, encounter_date)
+      VALUES (?, ?, ?)
     `);
     const result = insertAvaliacao.run(
+      pastoralId,
       data.basicInfo.coupleName || null,
       data.basicInfo.encounterDate || null
     );
@@ -252,14 +441,23 @@ export function insertAvaliacao(data: EvaluationData): number {
 }
 
 // Função para buscar todas as avaliações
-export function getAllAvaliacoes() {
+export function getAllAvaliacoes(pastoralId?: number) {
+  if (pastoralId) {
+    const avaliacoes = db.prepare('SELECT * FROM avaliacoes WHERE pastoral_id = ? ORDER BY created_at DESC').all(pastoralId);
+    return avaliacoes;
+  }
   const avaliacoes = db.prepare('SELECT * FROM avaliacoes ORDER BY created_at DESC').all();
   return avaliacoes;
 }
 
 // Função para buscar uma avaliação completa por ID
-export function getAvaliacaoById(id: number) {
-  const avaliacao = db.prepare('SELECT * FROM avaliacoes WHERE id = ?').get(id);
+export function getAvaliacaoById(id: number, pastoralId?: number) {
+  let avaliacao;
+  if (pastoralId) {
+    avaliacao = db.prepare('SELECT * FROM avaliacoes WHERE id = ? AND pastoral_id = ?').get(id, pastoralId);
+  } else {
+    avaliacao = db.prepare('SELECT * FROM avaliacoes WHERE id = ?').get(id);
+  }
 
   if (!avaliacao) return null;
 
@@ -288,68 +486,149 @@ export function getAvaliacaoById(id: number) {
 }
 
 // Função para obter estatísticas das avaliações
-export function getEstatisticas() {
-  const totalAvaliacoes = db.prepare('SELECT COUNT(*) as total FROM avaliacoes').get() as { total: number };
+export function getEstatisticas(pastoralId?: number) {
+  const whereClause = pastoralId ? 'WHERE a.pastoral_id = ?' : '';
+  const params = pastoralId ? [pastoralId] : [];
 
-  const mediaPreEncontro = db.prepare(`
-    SELECT
-      AVG(communication_clarity) as avg_communication,
-      AVG(registration_ease) as avg_registration
-    FROM pre_encontro
-  `).get();
+  const totalAvaliacoes = pastoralId
+    ? db.prepare('SELECT COUNT(*) as total FROM avaliacoes WHERE pastoral_id = ?').get(pastoralId) as { total: number }
+    : db.prepare('SELECT COUNT(*) as total FROM avaliacoes').get() as { total: number };
 
-  const mediaPalestras = db.prepare(`
-    SELECT
-      AVG(relevance) as avg_relevance,
-      AVG(clarity) as avg_clarity,
-      AVG(duration) as avg_duration
-    FROM palestras
-  `).get();
+  const mediaPreEncontro = pastoralId
+    ? db.prepare(`
+        SELECT
+          AVG(pe.communication_clarity) as avg_communication,
+          AVG(pe.registration_ease) as avg_registration
+        FROM pre_encontro pe
+        JOIN avaliacoes a ON pe.avaliacao_id = a.id
+        WHERE a.pastoral_id = ?
+      `).get(pastoralId)
+    : db.prepare(`
+        SELECT
+          AVG(communication_clarity) as avg_communication,
+          AVG(registration_ease) as avg_registration
+        FROM pre_encontro
+      `).get();
 
-  const mediaAmbientes = db.prepare(`
-    SELECT
-      AVG(comfort) as avg_comfort,
-      AVG(cleanliness) as avg_cleanliness,
-      AVG(decoration) as avg_decoration
-    FROM ambientes
-  `).get();
+  const mediaPalestras = pastoralId
+    ? db.prepare(`
+        SELECT
+          AVG(p.relevance) as avg_relevance,
+          AVG(p.clarity) as avg_clarity,
+          AVG(p.duration) as avg_duration
+        FROM palestras p
+        JOIN avaliacoes a ON p.avaliacao_id = a.id
+        WHERE a.pastoral_id = ?
+      `).get(pastoralId)
+    : db.prepare(`
+        SELECT
+          AVG(relevance) as avg_relevance,
+          AVG(clarity) as avg_clarity,
+          AVG(duration) as avg_duration
+        FROM palestras
+      `).get();
 
-  const mediaRefeicoes = db.prepare(`
-    SELECT
-      AVG(quality) as avg_quality,
-      AVG(organization) as avg_organization
-    FROM refeicoes
-  `).get();
+  const mediaAmbientes = pastoralId
+    ? db.prepare(`
+        SELECT
+          AVG(amb.comfort) as avg_comfort,
+          AVG(amb.cleanliness) as avg_cleanliness,
+          AVG(amb.decoration) as avg_decoration
+        FROM ambientes amb
+        JOIN avaliacoes a ON amb.avaliacao_id = a.id
+        WHERE a.pastoral_id = ?
+      `).get(pastoralId)
+    : db.prepare(`
+        SELECT
+          AVG(comfort) as avg_comfort,
+          AVG(cleanliness) as avg_cleanliness,
+          AVG(decoration) as avg_decoration
+        FROM ambientes
+      `).get();
 
-  const mediaMusicas = db.prepare(`
-    SELECT
-      AVG(suitability) as avg_suitability,
-      AVG(quality) as avg_quality
-    FROM musicas
-  `).get();
+  const mediaRefeicoes = pastoralId
+    ? db.prepare(`
+        SELECT
+          AVG(r.quality) as avg_quality,
+          AVG(r.organization) as avg_organization
+        FROM refeicoes r
+        JOIN avaliacoes a ON r.avaliacao_id = a.id
+        WHERE a.pastoral_id = ?
+      `).get(pastoralId)
+    : db.prepare(`
+        SELECT
+          AVG(quality) as avg_quality,
+          AVG(organization) as avg_organization
+        FROM refeicoes
+      `).get();
 
-  const mediaEquipe = db.prepare(`
-    SELECT
-      AVG(availability) as avg_availability,
-      AVG(organization) as avg_organization
-    FROM equipe
-  `).get();
+  const mediaMusicas = pastoralId
+    ? db.prepare(`
+        SELECT
+          AVG(m.suitability) as avg_suitability,
+          AVG(m.quality) as avg_quality
+        FROM musicas m
+        JOIN avaliacoes a ON m.avaliacao_id = a.id
+        WHERE a.pastoral_id = ?
+      `).get(pastoralId)
+    : db.prepare(`
+        SELECT
+          AVG(suitability) as avg_suitability,
+          AVG(quality) as avg_quality
+        FROM musicas
+      `).get();
 
-  const mediaAvaliacaoGeral = db.prepare(`
-    SELECT
-      AVG(expectations) as avg_expectations,
-      AVG(overall_rating) as avg_overall,
-      AVG(recommendation) as avg_recommendation
-    FROM avaliacao_geral
-  `).get();
+  const mediaEquipe = pastoralId
+    ? db.prepare(`
+        SELECT
+          AVG(e.availability) as avg_availability,
+          AVG(e.organization) as avg_organization
+        FROM equipe e
+        JOIN avaliacoes a ON e.avaliacao_id = a.id
+        WHERE a.pastoral_id = ?
+      `).get(pastoralId)
+    : db.prepare(`
+        SELECT
+          AVG(availability) as avg_availability,
+          AVG(organization) as avg_organization
+        FROM equipe
+      `).get();
 
-  const interestePastoral = db.prepare(`
-    SELECT
-      interest,
-      COUNT(*) as count
-    FROM pastoral
-    GROUP BY interest
-  `).all();
+  const mediaAvaliacaoGeral = pastoralId
+    ? db.prepare(`
+        SELECT
+          AVG(ag.expectations) as avg_expectations,
+          AVG(ag.overall_rating) as avg_overall,
+          AVG(ag.recommendation) as avg_recommendation
+        FROM avaliacao_geral ag
+        JOIN avaliacoes a ON ag.avaliacao_id = a.id
+        WHERE a.pastoral_id = ?
+      `).get(pastoralId)
+    : db.prepare(`
+        SELECT
+          AVG(expectations) as avg_expectations,
+          AVG(overall_rating) as avg_overall,
+          AVG(recommendation) as avg_recommendation
+        FROM avaliacao_geral
+      `).get();
+
+  const interestePastoral = pastoralId
+    ? db.prepare(`
+        SELECT
+          p.interest,
+          COUNT(*) as count
+        FROM pastoral p
+        JOIN avaliacoes a ON p.avaliacao_id = a.id
+        WHERE a.pastoral_id = ?
+        GROUP BY p.interest
+      `).all(pastoralId)
+    : db.prepare(`
+        SELECT
+          interest,
+          COUNT(*) as count
+        FROM pastoral
+        GROUP BY interest
+      `).all();
 
   return {
     totalAvaliacoes: totalAvaliacoes.total,
@@ -365,8 +644,12 @@ export function getEstatisticas() {
 }
 
 // Função para buscar interessados na Pastoral Familiar com contato
-export function getInteressadosPastoral() {
-  const interessados = db.prepare(`
+export function getInteressadosPastoral(pastoralId?: number) {
+  const whereClause = pastoralId
+    ? 'WHERE p.interest IN (\'sim\', \'talvez\') AND p.contact_info IS NOT NULL AND p.contact_info != \'\' AND a.pastoral_id = ?'
+    : 'WHERE p.interest IN (\'sim\', \'talvez\') AND p.contact_info IS NOT NULL AND p.contact_info != \'\'';
+
+  const query = `
     SELECT
       a.id as avaliacao_id,
       a.couple_name as nome_casal,
@@ -378,23 +661,29 @@ export function getInteressadosPastoral() {
     FROM avaliacoes a
     JOIN pastoral p ON a.id = p.avaliacao_id
     LEFT JOIN avaliacao_geral ag ON a.id = ag.avaliacao_id
-    WHERE p.interest IN ('sim', 'talvez')
-      AND p.contact_info IS NOT NULL
-      AND p.contact_info != ''
+    ${whereClause}
     ORDER BY
       CASE p.interest
         WHEN 'sim' THEN 1
         WHEN 'talvez' THEN 2
       END,
       a.created_at DESC
-  `).all();
+  `;
+
+  const interessados = pastoralId
+    ? db.prepare(query).all(pastoralId)
+    : db.prepare(query).all();
 
   return interessados;
 }
 
 // Função para buscar todos os contatos (incluindo os sem interesse explícito mas que deixaram contato)
-export function getTodosContatos() {
-  const contatos = db.prepare(`
+export function getTodosContatos(pastoralId?: number) {
+  const whereClause = pastoralId
+    ? 'WHERE p.contact_info IS NOT NULL AND p.contact_info != \'\' AND a.pastoral_id = ?'
+    : 'WHERE p.contact_info IS NOT NULL AND p.contact_info != \'\'';
+
+  const query = `
     SELECT
       a.id as avaliacao_id,
       a.couple_name as nome_casal,
@@ -407,17 +696,22 @@ export function getTodosContatos() {
     FROM avaliacoes a
     JOIN pastoral p ON a.id = p.avaliacao_id
     LEFT JOIN avaliacao_geral ag ON a.id = ag.avaliacao_id
-    WHERE p.contact_info IS NOT NULL
-      AND p.contact_info != ''
+    ${whereClause}
     ORDER BY a.created_at DESC
-  `).all();
+  `;
+
+  const contatos = pastoralId
+    ? db.prepare(query).all(pastoralId)
+    : db.prepare(query).all();
 
   return contatos;
 }
 
 // Função para buscar todas as avaliações completas (para relatório detalhado)
-export function getAllAvaliacoesDetalhadas() {
-  const avaliacoes = db.prepare('SELECT * FROM avaliacoes ORDER BY created_at DESC').all() as any[];
+export function getAllAvaliacoesDetalhadas(pastoralId?: number) {
+  const avaliacoes = pastoralId
+    ? db.prepare('SELECT * FROM avaliacoes WHERE pastoral_id = ? ORDER BY created_at DESC').all(pastoralId) as any[]
+    : db.prepare('SELECT * FROM avaliacoes ORDER BY created_at DESC').all() as any[];
 
   return avaliacoes.map((avaliacao) => {
     const id = avaliacao.id;
