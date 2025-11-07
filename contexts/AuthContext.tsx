@@ -26,20 +26,26 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 const TOKEN_KEY = 'auth_token';
 const USER_KEY = 'auth_user';
+const REFRESH_TOKEN_KEY = 'refresh_token';
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(null);
+  const [refreshToken, setRefreshToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   // Carregar dados do localStorage na inicialização
   useEffect(() => {
     const storedToken = localStorage.getItem(TOKEN_KEY);
     const storedUser = localStorage.getItem(USER_KEY);
+    const storedRefreshToken = localStorage.getItem(REFRESH_TOKEN_KEY);
 
     if (storedToken && storedUser) {
       setToken(storedToken);
       setUser(JSON.parse(storedUser));
+      if (storedRefreshToken) {
+        setRefreshToken(storedRefreshToken);
+      }
 
       // Validar token no backend
       validateToken(storedToken);
@@ -63,19 +69,62 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           setUser(data.user);
           localStorage.setItem(USER_KEY, JSON.stringify(data.user));
         } else {
-          // Token inválido
-          clearAuth();
+          // Token inválido, tentar renovar
+          await tryRefreshToken();
         }
+      } else if (response.status === 401) {
+        // Token expirado, tentar renovar
+        await tryRefreshToken();
       } else {
-        // Token inválido
+        // Outro erro, limpar autenticação
         clearAuth();
       }
     } catch (error) {
       console.error('Erro ao validar token:', error);
-      clearAuth();
+      // Tentar renovar em caso de erro
+      await tryRefreshToken();
     } finally {
       setIsLoading(false);
     }
+  };
+
+  // Tentar renovar access token usando refresh token
+  const tryRefreshToken = async () => {
+    const storedRefreshToken = localStorage.getItem(REFRESH_TOKEN_KEY);
+
+    if (!storedRefreshToken) {
+      clearAuth();
+      return false;
+    }
+
+    try {
+      const response = await fetch('/api/auth/refresh', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ refreshToken: storedRefreshToken })
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success && data.token && data.user) {
+          // Atualizar apenas o access token, manter o refresh token
+          setToken(data.token);
+          setUser(data.user);
+          localStorage.setItem(TOKEN_KEY, data.token);
+          localStorage.setItem(USER_KEY, JSON.stringify(data.user));
+          console.log('✅ Token renovado automaticamente');
+          return true;
+        }
+      }
+    } catch (error) {
+      console.error('Erro ao renovar token:', error);
+    }
+
+    // Se falhou, limpar autenticação
+    clearAuth();
+    return false;
   };
 
   // Login
@@ -92,11 +141,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const data = await response.json();
 
       if (response.ok && data.success && data.token && data.user) {
-        // Salvar token e usuário
+        // Salvar token, usuário e refresh token
         setToken(data.token);
         setUser(data.user);
         localStorage.setItem(TOKEN_KEY, data.token);
         localStorage.setItem(USER_KEY, JSON.stringify(data.user));
+
+        if (data.refreshToken) {
+          setRefreshToken(data.refreshToken);
+          localStorage.setItem(REFRESH_TOKEN_KEY, data.refreshToken);
+        }
 
         return { success: true };
       } else {
@@ -118,13 +172,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const logout = async () => {
     try {
       if (token) {
-        // Notificar backend do logout
+        const storedRefreshToken = localStorage.getItem(REFRESH_TOKEN_KEY);
+
+        // Notificar backend do logout e revogar refresh token
         await fetch('/api/auth/logout', {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json'
-          }
+          },
+          body: JSON.stringify({ refreshToken: storedRefreshToken })
         });
       }
     } catch (error) {
@@ -138,8 +195,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const clearAuth = () => {
     setToken(null);
     setUser(null);
+    setRefreshToken(null);
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(USER_KEY);
+    localStorage.removeItem(REFRESH_TOKEN_KEY);
   };
 
   // Atualizar dados do usuário

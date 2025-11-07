@@ -193,3 +193,285 @@ export function validateEmail(email: string): boolean {
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   return emailRegex.test(email);
 }
+
+// ============================================
+// REFRESH TOKENS
+// ============================================
+
+const REFRESH_TOKEN_SECRET: string = process.env.REFRESH_TOKEN_SECRET || 'refresh-secret-key-change-in-production';
+const REFRESH_TOKEN_EXPIRES_IN: string = process.env.REFRESH_TOKEN_EXPIRES_IN || '30d'; // 30 dias
+
+import { randomBytes } from 'crypto';
+import {
+  createRefreshToken,
+  getRefreshToken,
+  revokeRefreshToken,
+  revokeAllUserRefreshTokens,
+  type RefreshToken
+} from './database';
+
+export interface AuthResponseWithRefresh extends AuthResponse {
+  refreshToken?: string;
+}
+
+/**
+ * Gera um refresh token seguro
+ */
+export function generateRefreshToken(): string {
+  return randomBytes(64).toString('hex');
+}
+
+/**
+ * Calcula data de expiração do refresh token
+ */
+function getRefreshTokenExpiration(): string {
+  const expiresIn = parseInt(REFRESH_TOKEN_EXPIRES_IN.replace('d', ''));
+  const expirationDate = new Date();
+  expirationDate.setDate(expirationDate.getDate() + expiresIn);
+  return expirationDate.toISOString();
+}
+
+/**
+ * Autentica usuário e retorna access token + refresh token
+ */
+export function authenticateUserWithRefresh(
+  email: string,
+  password: string,
+  ipAddress?: string,
+  userAgent?: string
+): AuthResponseWithRefresh {
+  // Autenticar normalmente
+  const authResult = authenticateUser(email, password);
+
+  if (!authResult.success || !authResult.user) {
+    return authResult;
+  }
+
+  // Gerar refresh token
+  const refreshToken = generateRefreshToken();
+  const expiresAt = getRefreshTokenExpiration();
+
+  // Salvar refresh token no banco
+  createRefreshToken({
+    user_id: authResult.user.id,
+    token: refreshToken,
+    expires_at: expiresAt,
+    ip_address: ipAddress,
+    user_agent: userAgent
+  });
+
+  return {
+    ...authResult,
+    refreshToken
+  };
+}
+
+/**
+ * Renova access token usando refresh token
+ */
+export function refreshAccessToken(refreshToken: string): AuthResponse {
+  // Buscar refresh token
+  const tokenData = getRefreshToken(refreshToken);
+
+  if (!tokenData) {
+    return {
+      success: false,
+      message: 'Refresh token inválido ou expirado'
+    };
+  }
+
+  // Verificar se está expirado
+  const expiresAt = new Date(tokenData.expires_at);
+  if (expiresAt < new Date()) {
+    return {
+      success: false,
+      message: 'Refresh token expirado'
+    };
+  }
+
+  // Buscar usuário
+  const user = getUserById(tokenData.user_id);
+
+  if (!user || !user.is_active) {
+    return {
+      success: false,
+      message: 'Usuário inválido ou inativo'
+    };
+  }
+
+  // Gerar novo access token
+  const newAccessToken = generateToken(user);
+
+  return {
+    success: true,
+    token: newAccessToken,
+    user: {
+      id: user.id!,
+      email: user.email,
+      name: user.name,
+      role: user.role,
+      pastoralId: user.pastoral_id
+    }
+  };
+}
+
+/**
+ * Revoga refresh token (logout)
+ */
+export function logoutUser(refreshToken: string): void {
+  revokeRefreshToken(refreshToken);
+}
+
+/**
+ * Revoga todos os refresh tokens de um usuário
+ */
+export function logoutAllSessions(userId: number): void {
+  revokeAllUserRefreshTokens(userId);
+}
+
+// ============================================
+// PASSWORD RESET
+// ============================================
+
+import {
+  createPasswordResetToken,
+  getPasswordResetToken,
+  markPasswordResetTokenAsUsed,
+  type PasswordResetToken
+} from './database';
+
+/**
+ * Gera token de reset de senha
+ */
+export function generatePasswordResetToken(): string {
+  return randomBytes(32).toString('hex');
+}
+
+/**
+ * Inicia processo de reset de senha
+ */
+export function initiatePasswordReset(email: string, ipAddress?: string): { success: boolean; message: string; token?: string } {
+  // Buscar usuário por email
+  const user = getUserByEmail(email);
+
+  // Por segurança, sempre retornar sucesso mesmo se email não existir
+  // Isso previne enumeration attacks
+  if (!user) {
+    return {
+      success: true,
+      message: 'Se o email existir, você receberá instruções para redefinir sua senha.'
+    };
+  }
+
+  // Gerar token de reset
+  const resetToken = generatePasswordResetToken();
+  const expiresAt = new Date();
+  expiresAt.setHours(expiresAt.getHours() + 1); // Expira em 1 hora
+
+  // Salvar token no banco
+  createPasswordResetToken({
+    user_id: user.id!,
+    token: resetToken,
+    expires_at: expiresAt.toISOString(),
+    ip_address: ipAddress
+  });
+
+  // TODO: Enviar email com link de reset
+  // Por enquanto, vamos apenas logar no console
+  console.log('========================================');
+  console.log('PASSWORD RESET TOKEN');
+  console.log('========================================');
+  console.log(`Email: ${email}`);
+  console.log(`Nome: ${user.name}`);
+  console.log(`Token: ${resetToken}`);
+  console.log(`Link: http://localhost:5173/reset-password?token=${resetToken}`);
+  console.log(`Expira em: ${expiresAt.toISOString()}`);
+  console.log('========================================');
+
+  return {
+    success: true,
+    message: 'Se o email existir, você receberá instruções para redefinir sua senha.',
+    token: resetToken // Só para desenvolvimento - remover em produção
+  };
+}
+
+/**
+ * Valida token de reset de senha
+ */
+export function validatePasswordResetToken(token: string): { valid: boolean; userId?: number; message?: string } {
+  const tokenData = getPasswordResetToken(token);
+
+  if (!tokenData) {
+    return {
+      valid: false,
+      message: 'Token inválido ou expirado'
+    };
+  }
+
+  return {
+    valid: true,
+    userId: tokenData.user_id
+  };
+}
+
+/**
+ * Reseta senha usando token
+ */
+export function resetPasswordWithToken(token: string, newPassword: string): { success: boolean; message: string } {
+  // Validar token
+  const validation = validatePasswordResetToken(token);
+
+  if (!validation.valid) {
+    return {
+      success: false,
+      message: validation.message || 'Token inválido'
+    };
+  }
+
+  // Validar nova senha
+  const passwordValidation = validatePassword(newPassword);
+  if (!passwordValidation.valid) {
+    return {
+      success: false,
+      message: passwordValidation.message || 'Senha inválida'
+    };
+  }
+
+  // Buscar usuário
+  const user = getUserById(validation.userId!);
+  if (!user) {
+    return {
+      success: false,
+      message: 'Usuário não encontrado'
+    };
+  }
+
+  // Atualizar senha
+  const { updateUserPassword } = require('./database');
+  const newPasswordHash = hashPassword(newPassword);
+  updateUserPassword(validation.userId!, newPasswordHash);
+
+  // Marcar token como usado
+  markPasswordResetTokenAsUsed(token);
+
+  // Revogar todos os refresh tokens do usuário (forçar re-login)
+  revokeAllUserRefreshTokens(validation.userId!);
+
+  return {
+    success: true,
+    message: 'Senha redefinida com sucesso'
+  };
+}
+
+/**
+ * Envia email de reset de senha (simulado)
+ */
+export function sendPasswordResetEmail(email: string, token: string): void {
+  // TODO: Implementar envio de email real usando serviço SMTP
+  // Por exemplo: SendGrid, AWS SES, Nodemailer, etc.
+
+  console.log('📧 EMAIL SIMULADO - Password Reset');
+  console.log(`Para: ${email}`);
+  console.log(`Assunto: Redefinição de Senha`);
+  console.log(`Link: http://localhost:5173/reset-password?token=${token}`);
+}

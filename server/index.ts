@@ -51,11 +51,17 @@ import {
 import type { EvaluationData, Encontro } from '../types';
 import {
   authenticateUser,
+  authenticateUserWithRefresh,
   verifyToken,
   getUserFromToken,
   hashPassword,
   validatePassword,
-  validateEmail
+  validateEmail,
+  refreshAccessToken,
+  logoutUser,
+  initiatePasswordReset,
+  resetPasswordWithToken,
+  validatePasswordResetToken
 } from './auth';
 
 // Carregar variáveis de ambiente
@@ -420,8 +426,10 @@ app.post('/api/auth/login', (req, res) => {
       });
     }
 
-    // Autenticar usuário
-    const result = authenticateUser(email, password);
+    // Autenticar usuário com refresh token
+    const ipAddress = req.ip || req.socket.remoteAddress;
+    const userAgent = req.headers['user-agent'];
+    const result = authenticateUserWithRefresh(email, password, ipAddress, userAgent);
 
     if (!result.success) {
       // Log de tentativa de login falha
@@ -443,8 +451,8 @@ app.post('/api/auth/login', (req, res) => {
         pastoral_id: result.user.pastoralId || null,
         action: 'login',
         resource_type: 'auth',
-        ip_address: req.ip || req.socket.remoteAddress,
-        user_agent: req.headers['user-agent']
+        ip_address: ipAddress,
+        user_agent: userAgent
       });
     }
 
@@ -502,15 +510,22 @@ app.get('/api/auth/me', (req, res) => {
   }
 });
 
-// POST /api/auth/logout - Logout (opcional, JWT é stateless)
+// POST /api/auth/logout - Logout com revogação de refresh token
 app.post('/api/auth/logout', (req, res) => {
   try {
     const authHeader = req.headers.authorization;
     const token = authHeader?.replace('Bearer ', '');
+    const { refreshToken } = req.body;
 
     if (token) {
       const payload = verifyToken(token);
       if (payload) {
+        // Revogar refresh token se fornecido
+        if (refreshToken) {
+          logoutUser(refreshToken);
+          console.log(`🔒 Refresh token revogado para: ${payload.email}`);
+        }
+
         // Criar log de auditoria
         createAuditLog({
           user_id: payload.userId,
@@ -533,6 +548,136 @@ app.post('/api/auth/logout', (req, res) => {
     console.error('❌ Erro no logout:', error);
     res.status(500).json({
       success: false,
+      message: 'Erro interno no servidor'
+    });
+  }
+});
+
+// POST /api/auth/refresh - Renovar access token com refresh token
+app.post('/api/auth/refresh', (req, res) => {
+  try {
+    const { refreshToken } = req.body;
+
+    if (!refreshToken) {
+      return res.status(400).json({
+        success: false,
+        message: 'Refresh token não fornecido'
+      });
+    }
+
+    // Renovar access token
+    const result = refreshAccessToken(refreshToken);
+
+    if (!result.success) {
+      return res.status(401).json({
+        success: false,
+        message: result.message
+      });
+    }
+
+    console.log(`🔄 Token renovado para: ${result.user?.email}`);
+
+    res.json(result);
+  } catch (error) {
+    console.error('❌ Erro ao renovar token:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erro interno no servidor'
+    });
+  }
+});
+
+// POST /api/auth/forgot-password - Solicitar reset de senha
+app.post('/api/auth/forgot-password', (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email é obrigatório'
+      });
+    }
+
+    if (!validateEmail(email)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email inválido'
+      });
+    }
+
+    const ipAddress = req.ip || req.socket.remoteAddress;
+    const result = initiatePasswordReset(email, ipAddress);
+
+    console.log(`📧 Reset de senha solicitado para: ${email}`);
+
+    // Sempre retornar sucesso para prevenir enumeration attacks
+    res.json({
+      success: true,
+      message: result.message
+    });
+  } catch (error) {
+    console.error('❌ Erro ao solicitar reset de senha:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erro interno no servidor'
+    });
+  }
+});
+
+// POST /api/auth/reset-password - Resetar senha com token
+app.post('/api/auth/reset-password', (req, res) => {
+  try {
+    const { token, newPassword } = req.body;
+
+    if (!token || !newPassword) {
+      return res.status(400).json({
+        success: false,
+        message: 'Token e nova senha são obrigatórios'
+      });
+    }
+
+    // Resetar senha
+    const result = resetPasswordWithToken(token, newPassword);
+
+    if (!result.success) {
+      return res.status(400).json({
+        success: false,
+        message: result.message
+      });
+    }
+
+    console.log(`🔐 Senha resetada com sucesso`);
+
+    res.json(result);
+  } catch (error) {
+    console.error('❌ Erro ao resetar senha:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erro interno no servidor'
+    });
+  }
+});
+
+// GET /api/auth/validate-reset-token - Validar token de reset
+app.get('/api/auth/validate-reset-token', (req, res) => {
+  try {
+    const token = req.query.token as string;
+
+    if (!token) {
+      return res.status(400).json({
+        valid: false,
+        message: 'Token não fornecido'
+      });
+    }
+
+    const validation = validatePasswordResetToken(token);
+
+    res.json(validation);
+  } catch (error) {
+    console.error('❌ Erro ao validar token:', error);
+    res.status(500).json({
+      valid: false,
       message: 'Erro interno no servidor'
     });
   }

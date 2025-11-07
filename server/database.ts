@@ -216,6 +216,45 @@ export function initializeDatabase() {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_audit_pastoral_id ON audit_logs(pastoral_id)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_audit_created_at ON audit_logs(created_at)`);
 
+  // Tabela de refresh tokens
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS refresh_tokens (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      token TEXT UNIQUE NOT NULL,
+      expires_at DATETIME NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      revoked_at DATETIME,
+      ip_address TEXT,
+      user_agent TEXT,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `);
+
+  // Índices para refresh tokens
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_refresh_tokens_token ON refresh_tokens(token)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_id ON refresh_tokens(user_id)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_refresh_tokens_expires_at ON refresh_tokens(expires_at)`);
+
+  // Tabela de tokens de reset de senha
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS password_reset_tokens (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      token TEXT UNIQUE NOT NULL,
+      expires_at DATETIME NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      used_at DATETIME,
+      ip_address TEXT,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `);
+
+  // Índices para password reset tokens
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_password_reset_token ON password_reset_tokens(token)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_password_reset_user_id ON password_reset_tokens(user_id)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_password_reset_expires_at ON password_reset_tokens(expires_at)`);
+
   console.log('✅ Banco de dados inicializado com sucesso!');
 }
 
@@ -584,6 +623,11 @@ export function deactivateUser(id: number) {
 export function activateUser(id: number) {
   const update = db.prepare('UPDATE users SET is_active = 1 WHERE id = ?');
   return update.run(id);
+}
+
+export function updateUserPassword(id: number, passwordHash: string) {
+  const update = db.prepare('UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?');
+  return update.run(passwordHash, id);
 }
 
 // ==================== FUNÇÕES DE AUDITORIA ====================
@@ -1378,6 +1422,124 @@ export function getAllAvaliacoesDetalhadas(pastoralId?: number) {
 export function getAvaliacoesByEncontro(encontroId: number) {
   const avaliacoes = db.prepare('SELECT * FROM avaliacoes WHERE encontro_id = ? ORDER BY created_at DESC').all(encontroId);
   return avaliacoes;
+}
+
+// ============================================
+// REFRESH TOKENS
+// ============================================
+
+export interface RefreshToken {
+  id?: number;
+  user_id: number;
+  token: string;
+  expires_at: string;
+  created_at?: string;
+  revoked_at?: string | null;
+  ip_address?: string;
+  user_agent?: string;
+}
+
+export function createRefreshToken(refreshToken: RefreshToken): number {
+  const result = db.prepare(`
+    INSERT INTO refresh_tokens (user_id, token, expires_at, ip_address, user_agent)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(
+    refreshToken.user_id,
+    refreshToken.token,
+    refreshToken.expires_at,
+    refreshToken.ip_address,
+    refreshToken.user_agent
+  );
+
+  return result.lastInsertRowid as number;
+}
+
+export function getRefreshToken(token: string): RefreshToken | undefined {
+  return db.prepare(`
+    SELECT * FROM refresh_tokens
+    WHERE token = ? AND revoked_at IS NULL
+  `).get(token) as RefreshToken | undefined;
+}
+
+export function revokeRefreshToken(token: string): void {
+  db.prepare(`
+    UPDATE refresh_tokens
+    SET revoked_at = CURRENT_TIMESTAMP
+    WHERE token = ?
+  `).run(token);
+}
+
+export function revokeAllUserRefreshTokens(userId: number): void {
+  db.prepare(`
+    UPDATE refresh_tokens
+    SET revoked_at = CURRENT_TIMESTAMP
+    WHERE user_id = ? AND revoked_at IS NULL
+  `).run(userId);
+}
+
+export function cleanupExpiredRefreshTokens(): void {
+  db.prepare(`
+    DELETE FROM refresh_tokens
+    WHERE datetime(expires_at) < datetime('now')
+  `).run();
+}
+
+// ============================================
+// PASSWORD RESET TOKENS
+// ============================================
+
+export interface PasswordResetToken {
+  id?: number;
+  user_id: number;
+  token: string;
+  expires_at: string;
+  created_at?: string;
+  used_at?: string | null;
+  ip_address?: string;
+}
+
+export function createPasswordResetToken(resetToken: PasswordResetToken): number {
+  // Invalidar tokens anteriores do mesmo usuário
+  db.prepare(`
+    UPDATE password_reset_tokens
+    SET used_at = CURRENT_TIMESTAMP
+    WHERE user_id = ? AND used_at IS NULL
+  `).run(resetToken.user_id);
+
+  const result = db.prepare(`
+    INSERT INTO password_reset_tokens (user_id, token, expires_at, ip_address)
+    VALUES (?, ?, ?, ?)
+  `).run(
+    resetToken.user_id,
+    resetToken.token,
+    resetToken.expires_at,
+    resetToken.ip_address
+  );
+
+  return result.lastInsertRowid as number;
+}
+
+export function getPasswordResetToken(token: string): PasswordResetToken | undefined {
+  return db.prepare(`
+    SELECT * FROM password_reset_tokens
+    WHERE token = ? AND used_at IS NULL AND datetime(expires_at) > datetime('now')
+  `).get(token) as PasswordResetToken | undefined;
+}
+
+export function markPasswordResetTokenAsUsed(token: string): void {
+  db.prepare(`
+    UPDATE password_reset_tokens
+    SET used_at = CURRENT_TIMESTAMP
+    WHERE token = ?
+  `).run(token);
+}
+
+export function cleanupExpiredPasswordResetTokens(): void {
+  db.prepare(`
+    DELETE FROM password_reset_tokens
+    WHERE datetime(expires_at) < datetime('now')
+    OR used_at IS NOT NULL
+  `).run();
 }
 
 export default db;

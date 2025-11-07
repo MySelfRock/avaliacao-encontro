@@ -152,6 +152,13 @@ export default function Login() {
                 )}
               </button>
             </div>
+
+            {/* Forgot Password Link */}
+            <div className="text-center mt-4">
+              <a href="/forgot-password" className="text-sm text-blue-600 hover:text-blue-800">
+                Esqueceu sua senha?
+              </a>
+            </div>
           </form>
 
           {/* Informações de Ajuda */}

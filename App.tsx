@@ -11,6 +11,8 @@ import { EncontroEstatisticas } from './pages/EncontroEstatisticas';
 import Login from './pages/Login';
 import SuperAdminDashboard from './pages/SuperAdminDashboard';
 import PastoralAdminDashboard from './pages/PastoralAdminDashboard';
+import ForgotPassword from './pages/ForgotPassword';
+import ResetPassword from './pages/ResetPassword';
 
 // Protected Route Component
 function ProtectedRoute({ children, requiredRole }: {
@@ -53,10 +55,12 @@ function AppContent() {
   const location = useLocation();
   const { isAuthenticated } = useAuth();
 
-  // Não mostrar navegação nas rotas públicas de avaliação e login
+  // Não mostrar navegação nas rotas públicas de avaliação, login e reset de senha
   const isPublicRoute = location.pathname === '/' ||
                         location.pathname.startsWith('/avaliacao/') ||
-                        location.pathname === '/login';
+                        location.pathname === '/login' ||
+                        location.pathname === '/forgot-password' ||
+                        location.pathname === '/reset-password';
   const showNavigation = !isPublicRoute && isAuthenticated;
 
   return (
@@ -67,6 +71,8 @@ function AppContent() {
         <Route path="/" element={<AvaliacaoForm />} />
         <Route path="/avaliacao/:codigo" element={<AvaliacaoForm />} />
         <Route path="/login" element={<Login />} />
+        <Route path="/forgot-password" element={<ForgotPassword />} />
+        <Route path="/reset-password" element={<ResetPassword />} />
 
         {/* Dashboard routes - redirect to appropriate dashboard */}
         <Route
