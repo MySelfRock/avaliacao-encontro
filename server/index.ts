@@ -2,6 +2,8 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import * as dotenv from 'dotenv';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 import {
   initializeDatabase,
   migrateDatabase,
@@ -46,8 +48,128 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 const isProduction = process.env.NODE_ENV === 'production';
 
-// Middlewares
-app.use(cors());
+// ========================================
+// SEGURANÇA - HELMET
+// ========================================
+// Helmet ajuda a proteger contra vulnerabilidades web conhecidas
+app.use(helmet({
+  // Content Security Policy - define fontes confiáveis de conteúdo
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"], // Permite CSS inline (necessário para React)
+      scriptSrc: ["'self'", "'unsafe-inline'"], // Permite JS inline
+      imgSrc: ["'self'", "data:", "https:"], // Permite imagens de qualquer HTTPS
+      connectSrc: ["'self'"], // Permite requisições AJAX apenas para mesma origem
+      fontSrc: ["'self'", "data:"],
+      objectSrc: ["'none'"],
+      mediaSrc: ["'self'"],
+      frameSrc: ["'none'"],
+    },
+  },
+  // Outras proteções do Helmet
+  crossOriginEmbedderPolicy: false, // Desabilitar para permitir recursos externos
+  crossOriginResourcePolicy: { policy: "cross-origin" }, // Permite recursos cross-origin
+}));
+
+// ========================================
+// SEGURANÇA - RATE LIMITING
+// ========================================
+
+// Rate Limiter Geral - todas as requisições
+const generalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutos
+  max: 100, // Máximo 100 requisições por IP a cada 15 minutos
+  message: {
+    error: 'Muitas requisições',
+    message: 'Você excedeu o limite de requisições. Tente novamente em 15 minutos.'
+  },
+  standardHeaders: true, // Retorna info de rate limit nos headers `RateLimit-*`
+  legacyHeaders: false, // Desabilita headers `X-RateLimit-*`
+});
+
+// Rate Limiter para POST/PUT/DELETE - operações de escrita
+const writeLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutos
+  max: 30, // Máximo 30 operações de escrita a cada 15 minutos
+  message: {
+    error: 'Muitas operações de escrita',
+    message: 'Você excedeu o limite de operações. Tente novamente em alguns minutos.'
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Rate Limiter para rotas Admin - mais restritivo
+const adminLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutos
+  max: 50, // Máximo 50 requisições admin a cada 15 minutos
+  message: {
+    error: 'Muitas requisições administrativas',
+    message: 'Limite de operações administrativas excedido. Tente novamente mais tarde.'
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Aplicar rate limiter geral a todas as rotas da API
+app.use('/api/', generalLimiter);
+
+// ========================================
+// CORS COM CONTROLE DE ORIGEM POR SUBDOMÍNIO
+// ========================================
+
+// Configuração dinâmica de CORS baseada em subdomínios cadastrados
+const corsOptions: cors.CorsOptions = {
+  origin: (origin, callback) => {
+    // Permitir requisições sem origin (ex: mobile apps, Postman)
+    if (!origin) {
+      return callback(null, true);
+    }
+
+    // Em desenvolvimento, permitir localhost
+    if (!isProduction) {
+      const localhostPattern = /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
+      if (localhostPattern.test(origin)) {
+        return callback(null, true);
+      }
+    }
+
+    // Em produção, validar origem baseada nos subdomínios cadastrados
+    try {
+      const url = new URL(origin);
+      const hostname = url.hostname;
+
+      // Extrair subdomínio da origem
+      const parts = hostname.split('.');
+
+      // Se for um subdomínio (ex: saobenedito.avaliacoes.com)
+      if (parts.length > 2) {
+        const subdomain = parts[0];
+
+        // Verificar se existe pastoral com este subdomínio
+        const pastoral = getPastoralBySubdomain(subdomain);
+
+        if (pastoral) {
+          console.log(`✅ CORS permitido para origem: ${origin} (pastoral: ${pastoral.name})`);
+          return callback(null, true);
+        }
+      }
+
+      // Se chegou aqui, a origem não é permitida
+      console.warn(`⚠️  CORS bloqueado para origem não autorizada: ${origin}`);
+      callback(new Error('Origem não permitida por CORS'));
+    } catch (error) {
+      console.error('❌ Erro ao validar origem CORS:', error);
+      callback(new Error('Origem inválida'));
+    }
+  },
+  credentials: true, // Permite envio de cookies
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+};
+
+app.use(cors(corsOptions));
 app.use(express.json());
 
 // Servir arquivos estáticos do build do frontend em produção
@@ -136,7 +258,7 @@ app.get('/api/health', (req, res) => {
 });
 
 // POST - Criar nova avaliação
-app.post('/api/avaliacoes', (req, res) => {
+app.post('/api/avaliacoes', writeLimiter, (req, res) => {
   try {
     const data: EvaluationData = req.body;
 
@@ -319,7 +441,7 @@ app.get('/api/contatos', (req, res) => {
 // ========================================
 
 // POST - Criar novo encontro
-app.post('/api/encontros', (req, res) => {
+app.post('/api/encontros', writeLimiter, (req, res) => {
   try {
     const encontro: Encontro = req.body;
     const pastoralId = req.pastoral?.id;
@@ -444,7 +566,7 @@ app.get('/api/encontros/codigo/:codigo', (req, res) => {
 });
 
 // PUT - Atualizar encontro
-app.put('/api/encontros/:id', (req, res) => {
+app.put('/api/encontros/:id', writeLimiter, (req, res) => {
   try {
     const id = parseInt(req.params.id);
 
@@ -484,7 +606,7 @@ app.put('/api/encontros/:id', (req, res) => {
 });
 
 // DELETE - Deletar encontro
-app.delete('/api/encontros/:id', (req, res) => {
+app.delete('/api/encontros/:id', writeLimiter, (req, res) => {
   try {
     const id = parseInt(req.params.id);
 
@@ -663,7 +785,7 @@ app.get('/api/admin/pastorais/:id', authMiddleware, (req, res) => {
 });
 
 // POST - Criar nova pastoral (Admin)
-app.post('/api/admin/pastorais', authMiddleware, (req, res) => {
+app.post('/api/admin/pastorais', adminLimiter, authMiddleware, (req, res) => {
   try {
     const { name, subdomain, logoUrl, config } = req.body;
 
@@ -710,7 +832,7 @@ app.post('/api/admin/pastorais', authMiddleware, (req, res) => {
 });
 
 // PUT - Atualizar pastoral (Admin)
-app.put('/api/admin/pastorais/:id', authMiddleware, (req, res) => {
+app.put('/api/admin/pastorais/:id', adminLimiter, authMiddleware, (req, res) => {
   try {
     const id = parseInt(req.params.id);
     const { name, subdomain, logoUrl, config } = req.body;
@@ -760,7 +882,7 @@ app.put('/api/admin/pastorais/:id', authMiddleware, (req, res) => {
 });
 
 // PUT - Atualizar configuração da pastoral (Admin)
-app.put('/api/admin/pastorais/:id/config', authMiddleware, (req, res) => {
+app.put('/api/admin/pastorais/:id/config', adminLimiter, authMiddleware, (req, res) => {
   try {
     const id = parseInt(req.params.id);
     const { config } = req.body;
@@ -806,7 +928,7 @@ app.put('/api/admin/pastorais/:id/config', authMiddleware, (req, res) => {
 });
 
 // DELETE - Excluir pastoral (Admin)
-app.delete('/api/admin/pastorais/:id', authMiddleware, (req, res) => {
+app.delete('/api/admin/pastorais/:id', adminLimiter, authMiddleware, (req, res) => {
   try {
     const id = parseInt(req.params.id);
 
