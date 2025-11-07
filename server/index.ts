@@ -7,6 +7,7 @@ import rateLimit from 'express-rate-limit';
 import {
   initializeDatabase,
   migrateDatabase,
+  seedSuperAdmin,
   insertAvaliacao,
   getAllAvaliacoes,
   getAvaliacaoById,
@@ -20,6 +21,8 @@ import {
   updatePastoral,
   updatePastoralConfig,
   deletePastoral,
+  blockPastoral,
+  unblockPastoral,
   createEncontro,
   updateEncontro,
   getAllEncontros,
@@ -28,7 +31,22 @@ import {
   getEncontroByCodigo,
   deleteEncontro,
   getEstatisticasEncontro,
-  getAvaliacoesByEncontro
+  getAvaliacoesByEncontro,
+  // Funções de usuários
+  createUser,
+  getUserByEmail,
+  getUserById,
+  getAllUsers,
+  getUsersByPastoral,
+  updateUser,
+  deleteUser,
+  deactivateUser,
+  activateUser,
+  // Funções de auditoria
+  createAuditLog,
+  getAuditLogs,
+  type User,
+  type AuditLog
 } from './database';
 import type { EvaluationData, Encontro } from '../types';
 
@@ -183,6 +201,7 @@ if (isProduction) {
 // Inicializar e migrar banco de dados
 initializeDatabase();
 migrateDatabase();
+seedSuperAdmin(); // Criar super admin padrão se não existir
 
 // Middleware Multi-Tenant
 // Detecta a pastoral pelo subdomínio e injeta no request

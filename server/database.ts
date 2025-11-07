@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import path from 'path';
 import type { EvaluationData, Encontro, EncontroStatus } from '../types';
 import { randomBytes } from 'crypto';
+import bcrypt from 'bcryptjs';
 
 const dbPath = path.join(process.cwd(), 'avaliacoes.db');
 const db = new Database(dbPath);
@@ -170,6 +171,51 @@ export function initializeDatabase() {
     )
   `);
 
+  // Tabela de usuários (admins do sistema)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      email TEXT UNIQUE NOT NULL,
+      password_hash TEXT NOT NULL,
+      name TEXT NOT NULL,
+      role TEXT CHECK(role IN ('super_admin', 'pastoral_admin')) NOT NULL,
+      pastoral_id INTEGER,
+      is_active BOOLEAN DEFAULT 1,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      last_login DATETIME,
+      FOREIGN KEY (pastoral_id) REFERENCES pastorais(id) ON DELETE CASCADE
+    )
+  `);
+
+  // Índices para performance
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_users_pastoral_id ON users(pastoral_id)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_users_role ON users(role)`);
+
+  // Tabela de logs de auditoria
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS audit_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      pastoral_id INTEGER,
+      action TEXT NOT NULL,
+      resource_type TEXT NOT NULL,
+      resource_id INTEGER,
+      details TEXT,
+      ip_address TEXT,
+      user_agent TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (pastoral_id) REFERENCES pastorais(id) ON DELETE SET NULL
+    )
+  `);
+
+  // Índice para consultas de auditoria
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_audit_user_id ON audit_logs(user_id)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_audit_pastoral_id ON audit_logs(pastoral_id)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_audit_created_at ON audit_logs(created_at)`);
+
   console.log('✅ Banco de dados inicializado com sucesso!');
 }
 
@@ -229,6 +275,30 @@ export function migrateDatabase() {
         console.log('🔄 Adicionando coluna encontro_id à tabela avaliacoes...');
         db.exec(`ALTER TABLE avaliacoes ADD COLUMN encontro_id INTEGER REFERENCES encontros(id) ON DELETE SET NULL`);
         console.log('✅ Coluna encontro_id adicionada à tabela avaliacoes');
+      }
+
+      // Verificar se as colunas de status existem na tabela pastorais
+      const pastoraisTableInfo = db.prepare("PRAGMA table_info(pastorais)").all() as any[];
+      const hasIsActive = pastoraisTableInfo.some((col: any) => col.name === 'is_active');
+      const hasBlockedReason = pastoraisTableInfo.some((col: any) => col.name === 'blocked_reason');
+      const hasBlockedAt = pastoraisTableInfo.some((col: any) => col.name === 'blocked_at');
+
+      if (!hasIsActive) {
+        console.log('🔄 Adicionando coluna is_active à tabela pastorais...');
+        db.exec(`ALTER TABLE pastorais ADD COLUMN is_active BOOLEAN DEFAULT 1`);
+        console.log('✅ Coluna is_active adicionada à tabela pastorais');
+      }
+
+      if (!hasBlockedReason) {
+        console.log('🔄 Adicionando coluna blocked_reason à tabela pastorais...');
+        db.exec(`ALTER TABLE pastorais ADD COLUMN blocked_reason TEXT`);
+        console.log('✅ Coluna blocked_reason adicionada à tabela pastorais');
+      }
+
+      if (!hasBlockedAt) {
+        console.log('🔄 Adicionando coluna blocked_at à tabela pastorais...');
+        db.exec(`ALTER TABLE pastorais ADD COLUMN blocked_at DATETIME`);
+        console.log('✅ Coluna blocked_at adicionada à tabela pastorais');
       }
     } else {
       console.log('✅ Banco de dados novo - nenhuma migração necessária');
@@ -360,6 +430,276 @@ export function updatePastoral(id: number, data: {
 export function deletePastoral(id: number) {
   const del = db.prepare('DELETE FROM pastorais WHERE id = ?');
   return del.run(id);
+}
+
+export function blockPastoral(id: number, reason: string) {
+  const update = db.prepare(`
+    UPDATE pastorais
+    SET is_active = 0,
+        blocked_reason = ?,
+        blocked_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `);
+  return update.run(reason, id);
+}
+
+export function unblockPastoral(id: number) {
+  const update = db.prepare(`
+    UPDATE pastorais
+    SET is_active = 1,
+        blocked_reason = NULL,
+        blocked_at = NULL
+    WHERE id = ?
+  `);
+  return update.run(id);
+}
+
+// ==================== FUNÇÕES DE GERENCIAMENTO DE USUÁRIOS ====================
+
+export interface User {
+  id?: number;
+  email: string;
+  password_hash?: string;
+  name: string;
+  role: 'super_admin' | 'pastoral_admin';
+  pastoral_id?: number | null;
+  is_active?: boolean;
+  created_at?: string;
+  updated_at?: string;
+  last_login?: string | null;
+}
+
+export function createUser(user: User): number {
+  const insert = db.prepare(`
+    INSERT INTO users (email, password_hash, name, role, pastoral_id, is_active)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `);
+
+  const result = insert.run(
+    user.email,
+    user.password_hash,
+    user.name,
+    user.role,
+    user.pastoral_id || null,
+    user.is_active !== false ? 1 : 0
+  );
+
+  return result.lastInsertRowid as number;
+}
+
+export function getUserByEmail(email: string): User | undefined {
+  const stmt = db.prepare('SELECT * FROM users WHERE email = ?');
+  return stmt.get(email) as User | undefined;
+}
+
+export function getUserById(id: number): User | undefined {
+  const stmt = db.prepare('SELECT * FROM users WHERE id = ?');
+  return stmt.get(id) as User | undefined;
+}
+
+export function getAllUsers(): User[] {
+  const stmt = db.prepare(`
+    SELECT u.*, p.name as pastoral_name, p.subdomain as pastoral_subdomain
+    FROM users u
+    LEFT JOIN pastorais p ON u.pastoral_id = p.id
+    ORDER BY u.created_at DESC
+  `);
+  return stmt.all() as User[];
+}
+
+export function getUsersByPastoral(pastoralId: number): User[] {
+  const stmt = db.prepare(`
+    SELECT * FROM users
+    WHERE pastoral_id = ?
+    ORDER BY created_at DESC
+  `);
+  return stmt.all(pastoralId) as User[];
+}
+
+export function updateUser(id: number, data: Partial<User>) {
+  const fields: string[] = [];
+  const values: any[] = [];
+
+  if (data.name !== undefined) {
+    fields.push('name = ?');
+    values.push(data.name);
+  }
+
+  if (data.email !== undefined) {
+    fields.push('email = ?');
+    values.push(data.email);
+  }
+
+  if (data.password_hash !== undefined) {
+    fields.push('password_hash = ?');
+    values.push(data.password_hash);
+  }
+
+  if (data.role !== undefined) {
+    fields.push('role = ?');
+    values.push(data.role);
+  }
+
+  if (data.pastoral_id !== undefined) {
+    fields.push('pastoral_id = ?');
+    values.push(data.pastoral_id);
+  }
+
+  if (data.is_active !== undefined) {
+    fields.push('is_active = ?');
+    values.push(data.is_active ? 1 : 0);
+  }
+
+  fields.push('updated_at = CURRENT_TIMESTAMP');
+
+  if (fields.length === 0) {
+    throw new Error('Nenhum campo para atualizar');
+  }
+
+  const update = db.prepare(`
+    UPDATE users
+    SET ${fields.join(', ')}
+    WHERE id = ?
+  `);
+
+  values.push(id);
+  return update.run(...values);
+}
+
+export function updateUserLastLogin(id: number) {
+  const update = db.prepare('UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?');
+  return update.run(id);
+}
+
+export function deleteUser(id: number) {
+  const del = db.prepare('DELETE FROM users WHERE id = ?');
+  return del.run(id);
+}
+
+export function deactivateUser(id: number) {
+  const update = db.prepare('UPDATE users SET is_active = 0 WHERE id = ?');
+  return update.run(id);
+}
+
+export function activateUser(id: number) {
+  const update = db.prepare('UPDATE users SET is_active = 1 WHERE id = ?');
+  return update.run(id);
+}
+
+// ==================== FUNÇÕES DE AUDITORIA ====================
+
+export interface AuditLog {
+  id?: number;
+  user_id: number;
+  pastoral_id?: number | null;
+  action: string;
+  resource_type: string;
+  resource_id?: number | null;
+  details?: string;
+  ip_address?: string;
+  user_agent?: string;
+  created_at?: string;
+}
+
+export function createAuditLog(log: AuditLog): number {
+  const insert = db.prepare(`
+    INSERT INTO audit_logs (
+      user_id, pastoral_id, action, resource_type, resource_id,
+      details, ip_address, user_agent
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  const result = insert.run(
+    log.user_id,
+    log.pastoral_id || null,
+    log.action,
+    log.resource_type,
+    log.resource_id || null,
+    log.details || null,
+    log.ip_address || null,
+    log.user_agent || null
+  );
+
+  return result.lastInsertRowid as number;
+}
+
+export function getAuditLogs(filters?: {
+  userId?: number;
+  pastoralId?: number;
+  limit?: number;
+  offset?: number;
+}): AuditLog[] {
+  let query = `
+    SELECT a.*, u.name as user_name, u.email as user_email
+    FROM audit_logs a
+    JOIN users u ON a.user_id = u.id
+    WHERE 1=1
+  `;
+
+  const params: any[] = [];
+
+  if (filters?.userId) {
+    query += ' AND a.user_id = ?';
+    params.push(filters.userId);
+  }
+
+  if (filters?.pastoralId) {
+    query += ' AND a.pastoral_id = ?';
+    params.push(filters.pastoralId);
+  }
+
+  query += ' ORDER BY a.created_at DESC';
+
+  if (filters?.limit) {
+    query += ' LIMIT ?';
+    params.push(filters.limit);
+
+    if (filters?.offset) {
+      query += ' OFFSET ?';
+      params.push(filters.offset);
+    }
+  }
+
+  const stmt = db.prepare(query);
+  return stmt.all(...params) as AuditLog[];
+}
+
+// ==================== SEED DE SUPER ADMIN ====================
+
+export function seedSuperAdmin() {
+  // Verificar se já existe um super admin
+  const existingSuperAdmin = db.prepare(`
+    SELECT * FROM users WHERE role = 'super_admin' LIMIT 1
+  `).get();
+
+  if (existingSuperAdmin) {
+    console.log('✅ Super admin já existe');
+    return;
+  }
+
+  // Criar super admin padrão
+  // IMPORTANTE: Em produção, trocar essa senha imediatamente!
+  const passwordHash = bcrypt.hashSync('admin123', 10);
+
+  const insert = db.prepare(`
+    INSERT INTO users (email, password_hash, name, role, pastoral_id, is_active)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `);
+
+  const result = insert.run(
+    'admin@sistema.com',
+    passwordHash,
+    'Administrador do Sistema',
+    'super_admin',
+    null,
+    1
+  );
+
+  console.log('✅ Super admin criado com sucesso!');
+  console.log('   Email: admin@sistema.com');
+  console.log('   Senha: admin123');
+  console.log('   ⚠️  IMPORTANTE: Troque essa senha imediatamente em produção!');
 }
 
 // ==================== FUNÇÕES DE GERENCIAMENTO DE ENCONTROS ====================
