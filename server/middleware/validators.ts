@@ -133,7 +133,7 @@ export const createPastoralValidation = [
   body('estado')
     .trim()
     .isLength({ min: 2, max: 2 }).withMessage('Estado deve ter 2 caracteres (ex: SP)')
-    .toUpperCase(),
+    .customSanitizer((value: string) => value.toUpperCase()),
   body('contato_email')
     .trim()
     .isEmail().withMessage('Email de contato inválido')
