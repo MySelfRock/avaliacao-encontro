@@ -1,6 +1,7 @@
 import jwt, { type SignOptions } from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
-import { getUserByEmail, getUserById, updateUserLastLogin, type User } from './database';
+import { getUserByEmail, getUserById, updateUserLastLogin, getPastoralById, updateUserPassword, type User } from './database';
+import { sendPasswordResetEmail } from './services/email.service';
 
 const JWT_SECRET: string = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
 const JWT_EXPIRES_IN: string = process.env.JWT_EXPIRES_IN || '7d'; // 7 dias por padrão
@@ -100,8 +101,6 @@ export function authenticateUser(email: string, password: string): AuthResponse 
 
   // Se usuário é admin de pastoral, verificar se pastoral está ativa
   if (user.role === 'pastoral_admin' && user.pastoral_id) {
-    // Importar getPastoralById para verificar status
-    const { getPastoralById } = require('./database');
     const pastoral = getPastoralById(user.pastoral_id);
 
     if (!pastoral || !pastoral.is_active) {
@@ -350,7 +349,7 @@ export function generatePasswordResetToken(): string {
 /**
  * Inicia processo de reset de senha
  */
-export function initiatePasswordReset(email: string, ipAddress?: string): { success: boolean; message: string; token?: string } {
+export async function initiatePasswordReset(email: string, ipAddress?: string): Promise<{ success: boolean; message: string; token?: string }> {
   // Buscar usuário por email
   const user = getUserByEmail(email);
 
@@ -376,22 +375,27 @@ export function initiatePasswordReset(email: string, ipAddress?: string): { succ
     ip_address: ipAddress
   });
 
-  // TODO: Enviar email com link de reset
-  // Por enquanto, vamos apenas logar no console
-  console.log('========================================');
-  console.log('PASSWORD RESET TOKEN');
-  console.log('========================================');
-  console.log(`Email: ${email}`);
-  console.log(`Nome: ${user.name}`);
-  console.log(`Token: ${resetToken}`);
-  console.log(`Link: http://localhost:5173/reset-password?token=${resetToken}`);
-  console.log(`Expira em: ${expiresAt.toISOString()}`);
-  console.log('========================================');
+  // Enviar email com link de reset
+  const emailSent = await sendPasswordResetEmail(email, user.name, resetToken);
+
+  if (!emailSent) {
+    console.warn(`⚠️  Falha ao enviar email de reset para: ${email}`);
+    // Em desenvolvimento, logar no console como fallback
+    console.log('========================================');
+    console.log('PASSWORD RESET TOKEN (Fallback)');
+    console.log('========================================');
+    console.log(`Email: ${email}`);
+    console.log(`Nome: ${user.name}`);
+    console.log(`Token: ${resetToken}`);
+    console.log(`Expira em: ${expiresAt.toISOString()}`);
+    console.log('========================================');
+  } else {
+    console.log(`✅ Email de reset enviado com sucesso para: ${email}`);
+  }
 
   return {
     success: true,
-    message: 'Se o email existir, você receberá instruções para redefinir sua senha.',
-    token: resetToken // Só para desenvolvimento - remover em produção
+    message: 'Se o email existir, você receberá instruções para redefinir sua senha.'
   };
 }
 
@@ -447,7 +451,6 @@ export function resetPasswordWithToken(token: string, newPassword: string): { su
   }
 
   // Atualizar senha
-  const { updateUserPassword } = require('./database');
   const newPasswordHash = hashPassword(newPassword);
   updateUserPassword(validation.userId!, newPasswordHash);
 

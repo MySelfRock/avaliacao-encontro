@@ -1,8 +1,8 @@
 import express from 'express';
 import cors from 'cors';
 import path from 'path';
-import * as dotenv from 'dotenv';
 import helmet from 'helmet';
+import cookieParser from 'cookie-parser';
 import rateLimit from 'express-rate-limit';
 import {
   initializeDatabase,
@@ -64,8 +64,57 @@ import {
   validatePasswordResetToken
 } from './auth';
 
-// Carregar variáveis de ambiente
-dotenv.config();
+// Configuração de variáveis de ambiente com validação
+import { env } from './config/env';
+
+// Middlewares de segurança
+import {
+  loginLimiter,
+  passwordResetLimiter,
+  refreshTokenLimiter,
+  adminLimiter,
+  createResourceLimiter,
+  avaliacaoLimiter,
+  generalLimiter
+} from './middleware/rateLimiter';
+
+import {
+  loginValidation,
+  forgotPasswordValidation,
+  resetPasswordValidation,
+  createUserValidation,
+  updateUserValidation,
+  createPastoralValidation,
+  updatePastoralValidation,
+  blockPastoralValidation,
+  createEncontroValidation,
+  createAvaliacaoValidation,
+  idParamValidation
+} from './middleware/validators';
+
+import {
+  errorHandler,
+  notFoundHandler,
+  asyncHandler,
+  UnauthorizedError,
+  ValidationError,
+  NotFoundError
+} from './middleware/errorHandler';
+
+import {
+  csrfProtection,
+  generateCsrfToken,
+  csrfErrorHandler
+} from './middleware/csrf';
+
+import {
+  setAccessTokenCookie,
+  setRefreshTokenCookie,
+  clearAuthCookies,
+  getAccessToken,
+  getRefreshToken,
+  extractTokensFromCookies
+} from './middleware/secureCookies';
 
 // Estender o tipo Request do Express para incluir a pastoral e o user
 declare global {
@@ -111,46 +160,13 @@ app.use(helmet({
 }));
 
 // ========================================
-// SEGURANÇA - RATE LIMITING
+// SEGURANÇA - MIDDLEWARES
 // ========================================
 
-// Rate Limiter Geral - todas as requisições
-const generalLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutos
-  max: 100, // Máximo 100 requisições por IP a cada 15 minutos
-  message: {
-    error: 'Muitas requisições',
-    message: 'Você excedeu o limite de requisições. Tente novamente em 15 minutos.'
-  },
-  standardHeaders: true, // Retorna info de rate limit nos headers `RateLimit-*`
-  legacyHeaders: false, // Desabilita headers `X-RateLimit-*`
-});
+// Cookie Parser - para ler cookies HTTP-Only
+app.use(cookieParser());
 
-// Rate Limiter para POST/PUT/DELETE - operações de escrita
-const writeLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutos
-  max: 30, // Máximo 30 operações de escrita a cada 15 minutos
-  message: {
-    error: 'Muitas operações de escrita',
-    message: 'Você excedeu o limite de operações. Tente novamente em alguns minutos.'
-  },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
-// Rate Limiter para rotas Admin - mais restritivo
-const adminLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutos
-  max: 50, // Máximo 50 requisições admin a cada 15 minutos
-  message: {
-    error: 'Muitas requisições administrativas',
-    message: 'Limite de operações administrativas excedido. Tente novamente mais tarde.'
-  },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
-// Aplicar rate limiter geral a todas as rotas da API
+// Rate Limiter Geral - aplicado a todas as rotas da API
 app.use('/api/', generalLimiter);
 
 // ========================================
@@ -269,10 +285,11 @@ app.use((req, res, next) => {
 /**
  * Middleware de Autenticação JWT
  * Valida o token JWT e injeta os dados do usuário em req.user
+ * Suporta tokens via HTTP-Only cookies (preferencial) ou header Authorization
  */
 const authMiddleware = (req: express.Request, res: express.Response, next: express.NextFunction) => {
-  const authHeader = req.headers.authorization;
-  const token = authHeader?.replace('Bearer ', '');
+  // Tentar obter token de cookies ou header Authorization
+  const token = getAccessToken(req);
 
   if (!token) {
     console.warn('🔒 Tentativa de acesso sem token');
@@ -407,24 +424,11 @@ app.get('/api/health', (req, res) => {
 // ========================================
 
 // POST /api/auth/login - Login de usuários
-app.post('/api/auth/login', (req, res) => {
-  try {
+app.post('/api/auth/login',
+  loginLimiter,
+  loginValidation,
+  asyncHandler(async (req, res) => {
     const { email, password } = req.body;
-
-    // Validações
-    if (!email || !password) {
-      return res.status(400).json({
-        success: false,
-        message: 'Email e senha são obrigatórios'
-      });
-    }
-
-    if (!validateEmail(email)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Email inválido'
-      });
-    }
 
     // Autenticar usuário com refresh token
     const ipAddress = req.ip || req.socket.remoteAddress;
@@ -444,6 +448,14 @@ app.post('/api/auth/login', (req, res) => {
     // Log de sucesso
     console.log(`✅ Login bem-sucedido: ${result.user?.email} (${result.user?.role})`);
 
+    // Definir tokens em HTTP-Only cookies
+    if (result.token) {
+      setAccessTokenCookie(res, result.token);
+    }
+    if (result.refreshToken) {
+      setRefreshTokenCookie(res, result.refreshToken);
+    }
+
     // Criar log de auditoria
     if (result.user) {
       createAuditLog({
@@ -456,15 +468,10 @@ app.post('/api/auth/login', (req, res) => {
       });
     }
 
+    // Retornar resultado (também com tokens para compatibilidade)
     res.json(result);
-  } catch (error) {
-    console.error('❌ Erro no login:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Erro interno no servidor'
-    });
-  }
-});
+  })
+);
 
 // GET /api/auth/me - Obter dados do usuário logado
 app.get('/api/auth/me', (req, res) => {
@@ -511,11 +518,10 @@ app.get('/api/auth/me', (req, res) => {
 });
 
 // POST /api/auth/logout - Logout com revogação de refresh token
-app.post('/api/auth/logout', (req, res) => {
-  try {
-    const authHeader = req.headers.authorization;
-    const token = authHeader?.replace('Bearer ', '');
-    const { refreshToken } = req.body;
+app.post('/api/auth/logout',
+  asyncHandler(async (req, res) => {
+    const token = getAccessToken(req);
+    let refreshToken = getRefreshToken(req) || req.body.refreshToken;
 
     if (token) {
       const payload = verifyToken(token);
@@ -540,23 +546,22 @@ app.post('/api/auth/logout', (req, res) => {
       }
     }
 
+    // Limpar cookies de autenticação
+    clearAuthCookies(res);
+
     res.json({
       success: true,
       message: 'Logout realizado com sucesso'
     });
-  } catch (error) {
-    console.error('❌ Erro no logout:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Erro interno no servidor'
-    });
-  }
-});
+  })
+);
 
 // POST /api/auth/refresh - Renovar access token com refresh token
-app.post('/api/auth/refresh', (req, res) => {
-  try {
-    const { refreshToken } = req.body;
+app.post('/api/auth/refresh',
+  refreshTokenLimiter,
+  asyncHandler(async (req, res) => {
+    // Tentar obter refresh token de cookies ou body
+    const refreshToken = getRefreshToken(req) || req.body.refreshToken;
 
     if (!refreshToken) {
       return res.status(400).json({
@@ -577,37 +582,24 @@ app.post('/api/auth/refresh', (req, res) => {
 
     console.log(`🔄 Token renovado para: ${result.user?.email}`);
 
+    // Atualizar access token no cookie
+    if (result.token) {
+      setAccessTokenCookie(res, result.token);
+    }
+
     res.json(result);
-  } catch (error) {
-    console.error('❌ Erro ao renovar token:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Erro interno no servidor'
-    });
-  }
-});
+  })
+);
 
 // POST /api/auth/forgot-password - Solicitar reset de senha
-app.post('/api/auth/forgot-password', (req, res) => {
-  try {
+app.post('/api/auth/forgot-password',
+  passwordResetLimiter,
+  forgotPasswordValidation,
+  asyncHandler(async (req, res) => {
     const { email } = req.body;
 
-    if (!email) {
-      return res.status(400).json({
-        success: false,
-        message: 'Email é obrigatório'
-      });
-    }
-
-    if (!validateEmail(email)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Email inválido'
-      });
-    }
-
     const ipAddress = req.ip || req.socket.remoteAddress;
-    const result = initiatePasswordReset(email, ipAddress);
+    const result = await initiatePasswordReset(email, ipAddress);
 
     console.log(`📧 Reset de senha solicitado para: ${email}`);
 
@@ -616,26 +608,15 @@ app.post('/api/auth/forgot-password', (req, res) => {
       success: true,
       message: result.message
     });
-  } catch (error) {
-    console.error('❌ Erro ao solicitar reset de senha:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Erro interno no servidor'
-    });
-  }
-});
+  })
+);
 
 // POST /api/auth/reset-password - Resetar senha com token
-app.post('/api/auth/reset-password', (req, res) => {
-  try {
+app.post('/api/auth/reset-password',
+  passwordResetLimiter,
+  resetPasswordValidation,
+  asyncHandler(async (req, res) => {
     const { token, newPassword } = req.body;
-
-    if (!token || !newPassword) {
-      return res.status(400).json({
-        success: false,
-        message: 'Token e nova senha são obrigatórios'
-      });
-    }
 
     // Resetar senha
     const result = resetPasswordWithToken(token, newPassword);
@@ -650,14 +631,8 @@ app.post('/api/auth/reset-password', (req, res) => {
     console.log(`🔐 Senha resetada com sucesso`);
 
     res.json(result);
-  } catch (error) {
-    console.error('❌ Erro ao resetar senha:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Erro interno no servidor'
-    });
-  }
-});
+  })
+);
 
 // GET /api/auth/validate-reset-token - Validar token de reset
 app.get('/api/auth/validate-reset-token', (req, res) => {
@@ -692,106 +667,61 @@ app.post('/api/admin/users',
   authMiddleware,
   requireRole('super_admin'),
   adminLimiter,
-  (req, res) => {
-    try {
-      const { email, password, name, role, pastoralId } = req.body;
+  createUserValidation,
+  asyncHandler(async (req, res) => {
+    const { email, password, name, role, pastoralId } = req.body;
 
-      // Validações
-      if (!email || !password || !name || !role) {
-        return res.status(400).json({
-          success: false,
-          message: 'Email, senha, nome e role são obrigatórios'
-        });
-      }
-
-      if (!validateEmail(email)) {
-        return res.status(400).json({
-          success: false,
-          message: 'Email inválido'
-        });
-      }
-
-      const passwordValidation = validatePassword(password);
-      if (!passwordValidation.valid) {
-        return res.status(400).json({
-          success: false,
-          message: passwordValidation.message
-        });
-      }
-
-      if (role !== 'super_admin' && role !== 'pastoral_admin') {
-        return res.status(400).json({
-          success: false,
-          message: 'Role deve ser "super_admin" ou "pastoral_admin"'
-        });
-      }
-
-      // Se é pastoral_admin, precisa de pastoralId
-      if (role === 'pastoral_admin' && !pastoralId) {
-        return res.status(400).json({
-          success: false,
-          message: 'pastoralId é obrigatório para pastoral_admin'
-        });
-      }
-
-      // Verificar se email já existe
-      const existingUser = getUserByEmail(email);
-      if (existingUser) {
-        return res.status(409).json({
-          success: false,
-          message: 'Já existe um usuário com este email'
-        });
-      }
-
-      // Verificar se pastoral existe (se for pastoral_admin)
-      if (role === 'pastoral_admin') {
-        const pastoral = getPastoralById(pastoralId);
-        if (!pastoral) {
-          return res.status(404).json({
-            success: false,
-            message: 'Pastoral não encontrada'
-          });
-        }
-      }
-
-      // Criar usuário
-      const passwordHash = hashPassword(password);
-      const userId = createUser({
-        email,
-        password_hash: passwordHash,
-        name,
-        role,
-        pastoral_id: role === 'pastoral_admin' ? pastoralId : null,
-        is_active: true
-      });
-
-      // Log de auditoria
-      createAuditLog({
-        user_id: req.user!.userId,
-        pastoral_id: role === 'pastoral_admin' ? pastoralId : null,
-        action: 'create_user',
-        resource_type: 'user',
-        resource_id: userId,
-        details: JSON.stringify({ email, name, role }),
-        ip_address: req.ip || req.socket.remoteAddress,
-        user_agent: req.headers['user-agent']
-      });
-
-      console.log(`✅ Novo usuário criado: ${email} (${role}) por ${req.user!.email}`);
-
-      res.status(201).json({
-        success: true,
-        message: 'Usuário criado com sucesso',
-        userId
-      });
-    } catch (error) {
-      console.error('❌ Erro ao criar usuário:', error);
-      res.status(500).json({
+    // Verificar se email já existe
+    const existingUser = getUserByEmail(email);
+    if (existingUser) {
+      return res.status(409).json({
         success: false,
-        message: 'Erro interno no servidor'
+        message: 'Já existe um usuário com este email'
       });
     }
-  }
+
+    // Verificar se pastoral existe (se for pastoral_admin)
+    if (role === 'pastoral_admin') {
+      const pastoral = getPastoralById(pastoralId);
+      if (!pastoral) {
+        return res.status(404).json({
+          success: false,
+          message: 'Pastoral não encontrada'
+        });
+      }
+    }
+
+    // Criar usuário
+    const passwordHash = hashPassword(password);
+    const userId = createUser({
+      email,
+      password_hash: passwordHash,
+      name,
+      role,
+      pastoral_id: role === 'pastoral_admin' ? pastoralId : null,
+      is_active: true
+    });
+
+    // Log de auditoria
+    createAuditLog({
+      user_id: req.user!.userId,
+      pastoral_id: role === 'pastoral_admin' ? pastoralId : null,
+      action: 'create_user',
+      resource_type: 'user',
+      resource_id: userId,
+      details: JSON.stringify({ email, name, role }),
+      ip_address: req.ip || req.socket.remoteAddress,
+      user_agent: req.headers['user-agent']
+    });
+
+    console.log(`✅ Novo usuário criado: ${email} (${role}) por ${req.user!.email}`);
+
+    res.status(201).json({
+      success: true,
+      message: 'Usuário criado com sucesso',
+      userId
+    });
+  })
 );
 
 // GET /api/admin/users - Listar todos os usuários
@@ -1108,17 +1038,11 @@ app.put('/api/auth/change-password',
 );
 
 // POST - Criar nova avaliação
-app.post('/api/avaliacoes', writeLimiter, (req, res) => {
-  try {
+app.post('/api/avaliacoes',
+  avaliacaoLimiter,
+  createAvaliacaoValidation,
+  asyncHandler(async (req, res) => {
     const data: EvaluationData = req.body;
-
-    // Validação básica
-    if (!data) {
-      return res.status(400).json({
-        error: 'Dados inválidos',
-        message: 'Os dados da avaliação são obrigatórios'
-      });
-    }
 
     const avaliacaoId = insertAvaliacao(data);
 
@@ -1133,14 +1057,8 @@ app.post('/api/avaliacoes', writeLimiter, (req, res) => {
       id: avaliacaoId,
       timestamp: new Date().toISOString()
     });
-  } catch (error) {
-    console.error('❌ Erro ao salvar avaliação:', error);
-    res.status(500).json({
-      error: 'Erro ao salvar avaliação',
-      message: error instanceof Error ? error.message : 'Erro desconhecido'
-    });
-  }
-});
+  })
+);
 
 // GET - Listar todas as avaliações (resumo)
 app.get('/api/avaliacoes',
@@ -1321,19 +1239,11 @@ app.post('/api/encontros',
   requireRole('super_admin', 'pastoral_admin'),
   requireOwnPastoral,
   checkPastoralActive,
-  writeLimiter,
-  (req, res) => {
-  try {
+  createResourceLimiter,
+  createEncontroValidation,
+  asyncHandler(async (req, res) => {
     const encontro: Encontro = req.body;
     const pastoralId = req.pastoral?.id;
-
-    // Validação básica
-    if (!encontro.nome || !encontro.data_inicio || !encontro.data_fim) {
-      return res.status(400).json({
-        error: 'Dados inválidos',
-        message: 'Nome, data de início e data de fim são obrigatórios'
-      });
-    }
 
     if (!pastoralId) {
       return res.status(400).json({
@@ -1355,14 +1265,8 @@ app.post('/api/encontros',
       message: 'Encontro criado com sucesso!',
       data: novoEncontro
     });
-  } catch (error) {
-    console.error('❌ Erro ao criar encontro:', error);
-    res.status(500).json({
-      error: 'Erro ao criar encontro',
-      message: error instanceof Error ? error.message : 'Erro desconhecido'
-    });
-  }
-});
+  })
+);
 
 // GET - Listar todos os encontros
 app.get('/api/encontros',
@@ -1462,9 +1366,8 @@ app.put('/api/encontros/:id',
   requireRole('super_admin', 'pastoral_admin'),
   requireOwnPastoral,
   checkPastoralActive,
-  writeLimiter,
-  (req, res) => {
-  try {
+  createResourceLimiter,
+  asyncHandler(async (req, res) => {
     const id = parseInt(req.params.id);
 
     if (isNaN(id)) {
@@ -1493,14 +1396,8 @@ app.put('/api/encontros/:id',
       message: 'Encontro atualizado com sucesso!',
       data: encontroAtualizado
     });
-  } catch (error) {
-    console.error('❌ Erro ao atualizar encontro:', error);
-    res.status(500).json({
-      error: 'Erro ao atualizar encontro',
-      message: error instanceof Error ? error.message : 'Erro desconhecido'
-    });
-  }
-});
+  })
+);
 
 // DELETE - Deletar encontro
 app.delete('/api/encontros/:id',
@@ -1508,9 +1405,8 @@ app.delete('/api/encontros/:id',
   requireRole('super_admin', 'pastoral_admin'),
   requireOwnPastoral,
   checkPastoralActive,
-  writeLimiter,
-  (req, res) => {
-  try {
+  createResourceLimiter,
+  asyncHandler(async (req, res) => {
     const id = parseInt(req.params.id);
 
     if (isNaN(id)) {
@@ -1535,14 +1431,8 @@ app.delete('/api/encontros/:id',
       success: true,
       message: 'Encontro deletado com sucesso!'
     });
-  } catch (error) {
-    console.error('❌ Erro ao deletar encontro:', error);
-    res.status(500).json({
-      error: 'Erro ao deletar encontro',
-      message: error instanceof Error ? error.message : 'Erro desconhecido'
-    });
-  }
-});
+  })
+);
 
 // GET - Obter estatísticas de um encontro específico
 app.get('/api/encontros/:id/estatisticas',
@@ -1919,15 +1809,20 @@ if (isProduction) {
   app.get(/^\/(?!api\/).*/, (_req, res) => {
     res.sendFile(path.join(__dirname, '../../index.html'));
   });
-} else {
-  // Rota 404 apenas em desenvolvimento
-  app.use((req, res) => {
-    res.status(404).json({
-      error: 'Rota não encontrada',
-      message: `A rota ${req.method} ${req.path} não existe`
-    });
-  });
 }
+
+// ========================================
+// ERROR HANDLERS - DEVEM ESTAR NO FINAL
+// ========================================
+
+// Handler de 404 - rotas não encontradas
+app.use(notFoundHandler);
+
+// CSRF error handler - captura erros de CSRF
+app.use(csrfErrorHandler);
+
+// Global error handler - deve ser o último middleware
+app.use(errorHandler);
 
 // Iniciar servidor
 app.listen(PORT, () => {
