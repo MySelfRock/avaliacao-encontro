@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
+import { addCsrfHeader } from '../src/hooks/useCsrf';
 
 interface Encontro {
   id: number;
@@ -65,9 +66,7 @@ export default function PastoralAdminDashboard() {
 
   const loadEncontros = async () => {
     const response = await fetch('/api/encontros', {
-      headers: {
-        'Authorization': `Bearer ${token}`
-      }
+      credentials: 'include'
     });
 
     if (response.ok) {
@@ -90,9 +89,7 @@ export default function PastoralAdminDashboard() {
 
   const loadAvaliacoes = async () => {
     const response = await fetch('/api/avaliacoes', {
-      headers: {
-        'Authorization': `Bearer ${token}`
-      }
+      credentials: 'include'
     });
 
     if (response.ok) {
@@ -118,9 +115,7 @@ export default function PastoralAdminDashboard() {
   const handleExportRelatorio = async () => {
     try {
       const response = await fetch('/api/relatorios/avaliacoes', {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
+        credentials: 'include'
       });
 
       if (response.ok) {
@@ -549,10 +544,10 @@ function NewEncontroModal({ token, onClose, onSuccess }: {
     try {
       const response = await fetch('/api/encontros', {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
+        headers: addCsrfHeader({
           'Content-Type': 'application/json'
-        },
+        }),
+        credentials: 'include',
         body: JSON.stringify({
           ...formData,
           numero: parseInt(formData.numero)

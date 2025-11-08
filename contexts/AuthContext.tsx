@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import { addCsrfHeader } from '../src/hooks/useCsrf';
 
 interface User {
   id: number;
@@ -12,7 +13,6 @@ interface User {
 
 interface AuthContextType {
   user: User | null;
-  token: string | null;
   isAuthenticated: boolean;
   isLoading: boolean;
   login: (email: string, password: string) => Promise<{ success: boolean; message?: string }>;
@@ -24,107 +24,38 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const TOKEN_KEY = 'auth_token';
-const USER_KEY = 'auth_user';
-const REFRESH_TOKEN_KEY = 'refresh_token';
-
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
-  const [token, setToken] = useState<string | null>(null);
-  const [refreshToken, setRefreshToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Carregar dados do localStorage na inicialização
+  // Carregar usuário na inicialização (tokens estão em HTTP-Only cookies)
   useEffect(() => {
-    const storedToken = localStorage.getItem(TOKEN_KEY);
-    const storedUser = localStorage.getItem(USER_KEY);
-    const storedRefreshToken = localStorage.getItem(REFRESH_TOKEN_KEY);
-
-    if (storedToken && storedUser) {
-      setToken(storedToken);
-      setUser(JSON.parse(storedUser));
-      if (storedRefreshToken) {
-        setRefreshToken(storedRefreshToken);
-      }
-
-      // Validar token no backend
-      validateToken(storedToken);
-    } else {
-      setIsLoading(false);
-    }
+    loadUser();
   }, []);
 
-  // Validar token com o backend
-  const validateToken = async (tokenToValidate: string) => {
+  // Carregar dados do usuário do backend
+  const loadUser = async () => {
     try {
       const response = await fetch('/api/auth/me', {
-        headers: {
-          'Authorization': `Bearer ${tokenToValidate}`
-        }
+        credentials: 'include', // CRÍTICO: Envia cookies HTTP-Only
       });
 
       if (response.ok) {
         const data = await response.json();
         if (data.success && data.user) {
           setUser(data.user);
-          localStorage.setItem(USER_KEY, JSON.stringify(data.user));
         } else {
-          // Token inválido, tentar renovar
-          await tryRefreshToken();
+          setUser(null);
         }
-      } else if (response.status === 401) {
-        // Token expirado, tentar renovar
-        await tryRefreshToken();
       } else {
-        // Outro erro, limpar autenticação
-        clearAuth();
+        setUser(null);
       }
     } catch (error) {
-      console.error('Erro ao validar token:', error);
-      // Tentar renovar em caso de erro
-      await tryRefreshToken();
+      console.error('Erro ao carregar usuário:', error);
+      setUser(null);
     } finally {
       setIsLoading(false);
     }
-  };
-
-  // Tentar renovar access token usando refresh token
-  const tryRefreshToken = async () => {
-    const storedRefreshToken = localStorage.getItem(REFRESH_TOKEN_KEY);
-
-    if (!storedRefreshToken) {
-      clearAuth();
-      return false;
-    }
-
-    try {
-      const response = await fetch('/api/auth/refresh', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ refreshToken: storedRefreshToken })
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        if (data.success && data.token && data.user) {
-          // Atualizar apenas o access token, manter o refresh token
-          setToken(data.token);
-          setUser(data.user);
-          localStorage.setItem(TOKEN_KEY, data.token);
-          localStorage.setItem(USER_KEY, JSON.stringify(data.user));
-          console.log('✅ Token renovado automaticamente');
-          return true;
-        }
-      }
-    } catch (error) {
-      console.error('Erro ao renovar token:', error);
-    }
-
-    // Se falhou, limpar autenticação
-    clearAuth();
-    return false;
   };
 
   // Login
@@ -132,26 +63,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const response = await fetch('/api/auth/login', {
         method: 'POST',
-        headers: {
+        headers: addCsrfHeader({
           'Content-Type': 'application/json'
-        },
+        }),
+        credentials: 'include', // CRÍTICO: Permite backend definir cookies HTTP-Only
         body: JSON.stringify({ email, password })
       });
 
       const data = await response.json();
 
-      if (response.ok && data.success && data.token && data.user) {
-        // Salvar token, usuário e refresh token
-        setToken(data.token);
+      if (response.ok && data.success && data.user) {
+        // Tokens são salvos automaticamente em HTTP-Only cookies pelo backend
+        // Apenas armazenar dados do usuário no estado
         setUser(data.user);
-        localStorage.setItem(TOKEN_KEY, data.token);
-        localStorage.setItem(USER_KEY, JSON.stringify(data.user));
-
-        if (data.refreshToken) {
-          setRefreshToken(data.refreshToken);
-          localStorage.setItem(REFRESH_TOKEN_KEY, data.refreshToken);
-        }
-
         return { success: true };
       } else {
         return {
@@ -171,56 +95,40 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Logout
   const logout = async () => {
     try {
-      if (token) {
-        const storedRefreshToken = localStorage.getItem(REFRESH_TOKEN_KEY);
-
-        // Notificar backend do logout e revogar refresh token
-        await fetch('/api/auth/logout', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({ refreshToken: storedRefreshToken })
-        });
-      }
+      // Notificar backend para revogar refresh token e limpar cookies
+      await fetch('/api/auth/logout', {
+        method: 'POST',
+        headers: addCsrfHeader(),
+        credentials: 'include', // CRÍTICO: Envia cookies para serem revogados
+      });
     } catch (error) {
       console.error('Erro no logout:', error);
     } finally {
-      clearAuth();
+      // Limpar estado local
+      setUser(null);
     }
-  };
-
-  // Limpar autenticação
-  const clearAuth = () => {
-    setToken(null);
-    setUser(null);
-    setRefreshToken(null);
-    localStorage.removeItem(TOKEN_KEY);
-    localStorage.removeItem(USER_KEY);
-    localStorage.removeItem(REFRESH_TOKEN_KEY);
   };
 
   // Atualizar dados do usuário
   const refreshUser = async () => {
-    if (!token) return;
-
     try {
       const response = await fetch('/api/auth/me', {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
+        credentials: 'include', // CRÍTICO: Envia cookies HTTP-Only
       });
 
       if (response.ok) {
         const data = await response.json();
         if (data.success && data.user) {
           setUser(data.user);
-          localStorage.setItem(USER_KEY, JSON.stringify(data.user));
+        } else {
+          setUser(null);
         }
+      } else {
+        setUser(null);
       }
     } catch (error) {
       console.error('Erro ao atualizar usuário:', error);
+      setUser(null);
     }
   };
 
@@ -236,8 +144,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const value: AuthContextType = {
     user,
-    token,
-    isAuthenticated: !!user && !!token,
+    isAuthenticated: !!user,
     isLoading,
     login,
     logout,

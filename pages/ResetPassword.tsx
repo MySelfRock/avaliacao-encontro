@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useSearchParams, useNavigate } from 'react-router-dom';
+import { addCsrfHeader } from '../src/hooks/useCsrf';
 
 export default function ResetPassword() {
   const [searchParams] = useSearchParams();
@@ -81,9 +82,10 @@ export default function ResetPassword() {
     try {
       const response = await fetch('/api/auth/reset-password', {
         method: 'POST',
-        headers: {
+        headers: addCsrfHeader({
           'Content-Type': 'application/json'
-        },
+        }),
+        credentials: 'include',
         body: JSON.stringify({
           token,
           newPassword

@@ -11,6 +11,7 @@ import { EncontroEstatisticas } from './pages/EncontroEstatisticas';
 import Login from './pages/Login';
 import SuperAdminDashboard from './pages/SuperAdminDashboard';
 import PastoralAdminDashboard from './pages/PastoralAdminDashboard';
+import SecurityDashboard from './pages/SecurityDashboard';
 import ForgotPassword from './pages/ForgotPassword';
 import ResetPassword from './pages/ResetPassword';
 
@@ -90,6 +91,14 @@ function AppContent() {
           element={
             <ProtectedRoute requiredRole="super_admin">
               <SuperAdminDashboard />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/admin/security"
+          element={
+            <ProtectedRoute requiredRole="super_admin">
+              <SecurityDashboard />
             </ProtectedRoute>
           }
         />

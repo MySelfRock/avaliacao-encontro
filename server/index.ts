@@ -4,6 +4,7 @@ import path from 'path';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
 import rateLimit from 'express-rate-limit';
+import morgan from 'morgan';
 import {
   initializeDatabase,
   migrateDatabase,
@@ -66,6 +67,12 @@ import {
 
 // Configuração de variáveis de ambiente com validação
 import { env } from './config/env';
+
+// Logger estruturado
+import { logger, logAuth, logHTTP, morganStream } from './config/logger';
+
+// Login attempt monitoring
+import { checkLoginAttempts, recordLoginAttempt, getLoginAttemptStats } from './middleware/loginAttemptMonitor';
 
 // Middlewares de segurança
 import {
@@ -163,6 +170,9 @@ app.use(helmet({
 // SEGURANÇA - MIDDLEWARES
 // ========================================
 
+// HTTP Request Logging com Morgan + Winston
+app.use(morgan('combined', { stream: morganStream }));
+
 // Cookie Parser - para ler cookies HTTP-Only
 app.use(cookieParser());
 
@@ -205,16 +215,16 @@ const corsOptions: cors.CorsOptions = {
         const pastoral = getPastoralBySubdomain(subdomain);
 
         if (pastoral) {
-          console.log(`✅ CORS permitido para origem: ${origin} (pastoral: ${pastoral.name})`);
+          logger.info(`✅ CORS permitido para origem: ${origin} (pastoral: ${pastoral.name})`);
           return callback(null, true);
         }
       }
 
       // Se chegou aqui, a origem não é permitida
-      console.warn(`⚠️  CORS bloqueado para origem não autorizada: ${origin}`);
+      logger.warn(`⚠️  CORS bloqueado para origem não autorizada: ${origin}`);
       callback(new Error('Origem não permitida por CORS'));
     } catch (error) {
-      console.error('❌ Erro ao validar origem CORS:', error);
+      logger.error('❌ Erro ao validar origem CORS:', error);
       callback(new Error('Origem inválida'));
     }
   },
@@ -248,7 +258,7 @@ app.use((req, res, next) => {
   }
 
   const host = req.hostname;
-  console.log('🌐 Hostname:', host);
+  logger.info('🌐 Hostname:', host);
 
   // Em desenvolvimento ou localhost, usar 'default'
   // Em produção, extrair subdomínio (ex: saobenedito.avaliacoes.com -> saobenedito)
@@ -261,19 +271,19 @@ app.use((req, res, next) => {
     }
   }
 
-  console.log('🏛️  Subdomínio detectado:', subdomain);
+  logger.info('🏛️  Subdomínio detectado:', subdomain);
 
   const pastoral = getPastoralBySubdomain(subdomain);
 
   if (!pastoral) {
-    console.warn(`⚠️  Pastoral não encontrada para subdomínio: ${subdomain}`);
+    logger.warn(`⚠️  Pastoral não encontrada para subdomínio: ${subdomain}`);
     return res.status(404).json({
       error: 'Pastoral não encontrada',
       message: `Nenhuma pastoral cadastrada para o subdomínio: ${subdomain}`
     });
   }
 
-  console.log('✅ Pastoral encontrada:', pastoral.name);
+  logger.info('✅ Pastoral encontrada:', pastoral.name);
   req.pastoral = pastoral;
   next();
 });
@@ -292,7 +302,11 @@ const authMiddleware = (req: express.Request, res: express.Response, next: expre
   const token = getAccessToken(req);
 
   if (!token) {
-    console.warn('🔒 Tentativa de acesso sem token');
+    logger.warn('Unauthorized access attempt - no token', {
+      event: 'auth.no_token',
+      ip: req.ip || req.socket.remoteAddress,
+      path: req.path,
+    });
     return res.status(401).json({
       error: 'Não autorizado',
       message: 'Token de autenticação não fornecido'
@@ -302,7 +316,11 @@ const authMiddleware = (req: express.Request, res: express.Response, next: expre
   const payload = verifyToken(token);
 
   if (!payload) {
-    console.warn('🔒 Tentativa de acesso com token inválido');
+    logger.warn('Invalid token used', {
+      event: 'auth.invalid_token',
+      ip: req.ip || req.socket.remoteAddress,
+      path: req.path,
+    });
     return res.status(401).json({
       error: 'Não autorizado',
       message: 'Token inválido ou expirado'
@@ -313,7 +331,11 @@ const authMiddleware = (req: express.Request, res: express.Response, next: expre
   const user = getUserById(payload.userId);
 
   if (!user || !user.is_active) {
-    console.warn(`🔒 Usuário inativo tentou acessar: ${payload.email}`);
+    logger.warn('Inactive user access attempt', {
+      event: 'auth.inactive_user',
+      email: payload.email,
+      ip: req.ip || req.socket.remoteAddress,
+    });
     return res.status(403).json({
       error: 'Acesso negado',
       message: 'Usuário desativado. Entre em contato com o administrador.'
@@ -345,7 +367,7 @@ const requireRole = (...allowedRoles: Array<'super_admin' | 'pastoral_admin'>) =
     }
 
     if (!allowedRoles.includes(req.user.role)) {
-      console.warn(`🔒 Acesso negado: ${req.user.email} (${req.user.role}) tentou acessar rota de ${allowedRoles.join(', ')}`);
+      logger.warn(`🔒 Acesso negado: ${req.user.email} (${req.user.role}) tentou acessar rota de ${allowedRoles.join(', ')}`);
       return res.status(403).json({
         error: 'Acesso negado',
         message: 'Você não tem permissão para acessar este recurso'
@@ -377,7 +399,7 @@ const requireOwnPastoral = (req: express.Request, res: express.Response, next: e
   // Pastoral admin só pode acessar sua própria pastoral
   if (req.user.role === 'pastoral_admin') {
     if (!req.pastoral || req.pastoral.id !== req.user.pastoralId) {
-      console.warn(`🔒 ${req.user.email} tentou acessar pastoral diferente da sua`);
+      logger.warn(`🔒 ${req.user.email} tentou acessar pastoral diferente da sua`);
       return res.status(403).json({
         error: 'Acesso negado',
         message: 'Você não tem permissão para acessar esta pastoral'
@@ -399,7 +421,7 @@ const checkPastoralActive = (req: express.Request, res: express.Response, next: 
 
   // Verificar se pastoral está ativa
   if (req.pastoral && !req.pastoral.is_active) {
-    console.warn(`🔒 Tentativa de acesso a pastoral bloqueada: ${req.pastoral.name}`);
+    logger.warn(`🔒 Tentativa de acesso a pastoral bloqueada: ${req.pastoral.name}`);
     return res.status(403).json({
       error: 'Pastoral bloqueada',
       message: req.pastoral.blocked_reason || 'Esta pastoral está temporariamente desabilitada. Entre em contato com o suporte.',
@@ -426,6 +448,7 @@ app.get('/api/health', (req, res) => {
 // POST /api/auth/login - Login de usuários
 app.post('/api/auth/login',
   loginLimiter,
+  checkLoginAttempts, // Verificar bloqueio por tentativas
   loginValidation,
   asyncHandler(async (req, res) => {
     const { email, password } = req.body;
@@ -435,9 +458,18 @@ app.post('/api/auth/login',
     const userAgent = req.headers['user-agent'];
     const result = authenticateUserWithRefresh(email, password, ipAddress, userAgent);
 
+    // Registrar tentativa de login
+    recordLoginAttempt({
+      ip_address: ipAddress || 'unknown',
+      email,
+      success: result.success,
+      attempted_at: new Date().toISOString(),
+      user_agent: userAgent,
+    });
+
     if (!result.success) {
-      // Log de tentativa de login falha
-      console.warn(`⚠️  Tentativa de login falhou: ${email}`);
+      // Log de tentativa falha
+      logAuth.login(email, false, ipAddress);
 
       return res.status(401).json({
         success: false,
@@ -446,7 +478,7 @@ app.post('/api/auth/login',
     }
 
     // Log de sucesso
-    console.log(`✅ Login bem-sucedido: ${result.user?.email} (${result.user?.role})`);
+    logAuth.login(email, true, ipAddress);
 
     // Definir tokens em HTTP-Only cookies
     if (result.token) {
@@ -509,7 +541,7 @@ app.get('/api/auth/me', (req, res) => {
       }
     });
   } catch (error) {
-    console.error('❌ Erro ao obter usuário:', error);
+    logger.error('Error fetching user', { error: error instanceof Error ? error.message : error });
     res.status(500).json({
       success: false,
       message: 'Erro interno no servidor'
@@ -529,7 +561,7 @@ app.post('/api/auth/logout',
         // Revogar refresh token se fornecido
         if (refreshToken) {
           logoutUser(refreshToken);
-          console.log(`🔒 Refresh token revogado para: ${payload.email}`);
+          logger.info(`🔒 Refresh token revogado para: ${payload.email}`);
         }
 
         // Criar log de auditoria
@@ -542,7 +574,7 @@ app.post('/api/auth/logout',
           user_agent: req.headers['user-agent']
         });
 
-        console.log(`✅ Logout: ${payload.email}`);
+        logger.info(`✅ Logout: ${payload.email}`);
       }
     }
 
@@ -580,7 +612,7 @@ app.post('/api/auth/refresh',
       });
     }
 
-    console.log(`🔄 Token renovado para: ${result.user?.email}`);
+    logger.info(`🔄 Token renovado para: ${result.user?.email}`);
 
     // Atualizar access token no cookie
     if (result.token) {
@@ -601,7 +633,7 @@ app.post('/api/auth/forgot-password',
     const ipAddress = req.ip || req.socket.remoteAddress;
     const result = await initiatePasswordReset(email, ipAddress);
 
-    console.log(`📧 Reset de senha solicitado para: ${email}`);
+    logger.info(`📧 Reset de senha solicitado para: ${email}`);
 
     // Sempre retornar sucesso para prevenir enumeration attacks
     res.json({
@@ -628,7 +660,7 @@ app.post('/api/auth/reset-password',
       });
     }
 
-    console.log(`🔐 Senha resetada com sucesso`);
+    logger.info(`🔐 Senha resetada com sucesso`);
 
     res.json(result);
   })
@@ -650,7 +682,7 @@ app.get('/api/auth/validate-reset-token', (req, res) => {
 
     res.json(validation);
   } catch (error) {
-    console.error('❌ Erro ao validar token:', error);
+    logger.error('❌ Erro ao validar token:', error);
     res.status(500).json({
       valid: false,
       message: 'Erro interno no servidor'
@@ -714,7 +746,7 @@ app.post('/api/admin/users',
       user_agent: req.headers['user-agent']
     });
 
-    console.log(`✅ Novo usuário criado: ${email} (${role}) por ${req.user!.email}`);
+    logger.info(`✅ Novo usuário criado: ${email} (${role}) por ${req.user!.email}`);
 
     res.status(201).json({
       success: true,
@@ -750,7 +782,7 @@ app.get('/api/admin/users',
         users: safeUsers
       });
     } catch (error) {
-      console.error('❌ Erro ao listar usuários:', error);
+      logger.error('❌ Erro ao listar usuários:', error);
       res.status(500).json({
         success: false,
         message: 'Erro interno no servidor'
@@ -804,14 +836,14 @@ app.put('/api/admin/users/:id',
         user_agent: req.headers['user-agent']
       });
 
-      console.log(`✅ Usuário ${userId} atualizado por ${req.user!.email}`);
+      logger.info(`✅ Usuário ${userId} atualizado por ${req.user!.email}`);
 
       res.json({
         success: true,
         message: 'Usuário atualizado com sucesso'
       });
     } catch (error) {
-      console.error('❌ Erro ao atualizar usuário:', error);
+      logger.error('❌ Erro ao atualizar usuário:', error);
       res.status(500).json({
         success: false,
         message: 'Erro interno no servidor'
@@ -866,14 +898,14 @@ app.put('/api/admin/pastorais/:id/block',
         user_agent: req.headers['user-agent']
       });
 
-      console.log(`✅ Pastoral ${pastoral.name} bloqueada por ${req.user!.email}: ${reason}`);
+      logger.info(`✅ Pastoral ${pastoral.name} bloqueada por ${req.user!.email}: ${reason}`);
 
       res.json({
         success: true,
         message: 'Pastoral bloqueada com sucesso'
       });
     } catch (error) {
-      console.error('❌ Erro ao bloquear pastoral:', error);
+      logger.error('❌ Erro ao bloquear pastoral:', error);
       res.status(500).json({
         success: false,
         message: 'Erro interno no servidor'
@@ -919,14 +951,14 @@ app.put('/api/admin/pastorais/:id/unblock',
         user_agent: req.headers['user-agent']
       });
 
-      console.log(`✅ Pastoral ${pastoral.name} desbloqueada por ${req.user!.email}`);
+      logger.info(`✅ Pastoral ${pastoral.name} desbloqueada por ${req.user!.email}`);
 
       res.json({
         success: true,
         message: 'Pastoral desbloqueada com sucesso'
       });
     } catch (error) {
-      console.error('❌ Erro ao desbloquear pastoral:', error);
+      logger.error('❌ Erro ao desbloquear pastoral:', error);
       res.status(500).json({
         success: false,
         message: 'Erro interno no servidor'
@@ -956,7 +988,40 @@ app.get('/api/admin/audit-logs',
         logs
       });
     } catch (error) {
-      console.error('❌ Erro ao buscar logs de auditoria:', error);
+      logger.error('❌ Erro ao buscar logs de auditoria:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Erro interno no servidor'
+      });
+    }
+  }
+);
+
+// GET /api/admin/security/stats - Ver estatísticas de segurança
+app.get('/api/admin/security/stats',
+  authMiddleware,
+  requireRole('super_admin'),
+  (req, res) => {
+    try {
+      const hours = req.query.hours ? parseInt(req.query.hours as string) : 24;
+      const stats = getLoginAttemptStats(hours);
+
+      logger.info('Security stats retrieved', {
+        event: 'admin.security_stats',
+        user: req.user?.email,
+        hours,
+      });
+
+      res.json({
+        success: true,
+        stats,
+        period: `${hours} hours`
+      });
+    } catch (error) {
+      logger.error('Error fetching security stats', {
+        event: 'admin.security_stats_error',
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
       res.status(500).json({
         success: false,
         message: 'Erro interno no servidor'
@@ -1021,14 +1086,14 @@ app.put('/api/auth/change-password',
         user_agent: req.headers['user-agent']
       });
 
-      console.log(`✅ ${req.user!.email} trocou sua senha`);
+      logger.info(`✅ ${req.user!.email} trocou sua senha`);
 
       res.json({
         success: true,
         message: 'Senha alterada com sucesso'
       });
     } catch (error) {
-      console.error('❌ Erro ao trocar senha:', error);
+      logger.error('❌ Erro ao trocar senha:', error);
       res.status(500).json({
         success: false,
         message: 'Erro interno no servidor'
@@ -1046,10 +1111,10 @@ app.post('/api/avaliacoes',
 
     const avaliacaoId = insertAvaliacao(data);
 
-    console.log(`✅ Nova avaliação criada com ID: ${avaliacaoId}`);
-    console.log(`   Casal: ${data.basicInfo.coupleName || 'Anônimo'}`);
-    console.log(`   Data do encontro: ${data.basicInfo.encounterDate || 'Não informada'}`);
-    console.log(`   Nota geral: ${data.posEncontro.geral.overallRating} estrelas`);
+    logger.info(`✅ Nova avaliação criada com ID: ${avaliacaoId}`);
+    logger.info(`   Casal: ${data.basicInfo.coupleName || 'Anônimo'}`);
+    logger.info(`   Data do encontro: ${data.basicInfo.encounterDate || 'Não informada'}`);
+    logger.info(`   Nota geral: ${data.posEncontro.geral.overallRating} estrelas`);
 
     res.status(201).json({
       success: true,
@@ -1078,7 +1143,7 @@ app.get('/api/avaliacoes',
       pastoral: req.pastoral?.name
     });
   } catch (error) {
-    console.error('❌ Erro ao buscar avaliações:', error);
+    logger.error('❌ Erro ao buscar avaliações:', error);
     res.status(500).json({
       error: 'Erro ao buscar avaliações',
       message: error instanceof Error ? error.message : 'Erro desconhecido'
@@ -1092,7 +1157,7 @@ app.get('/api/avaliacoes',
 // app.get('/api/avaliacoes/detalhadas', (req, res) => {
 //   try {
 //     const avaliacoes = getAllAvaliacoesDetalhadas();
-//     console.log(`📋 Buscando avaliações detalhadas: ${avaliacoes.length} encontrada(s)`);
+//     logger.info(`📋 Buscando avaliações detalhadas: ${avaliacoes.length} encontrada(s)`);
 //     res.json({
 //       success: true,
 //       total: avaliacoes.length,
@@ -1100,7 +1165,7 @@ app.get('/api/avaliacoes',
 //       message: `${avaliacoes.length} avaliação(ões) encontrada(s)`
 //     });
 //   } catch (error) {
-//     console.error('❌ Erro ao buscar avaliações detalhadas:', error);
+//     logger.error('❌ Erro ao buscar avaliações detalhadas:', error);
 //     res.status(500).json({
 //       error: 'Erro ao buscar avaliações detalhadas',
 //       message: error instanceof Error ? error.message : 'Erro desconhecido'
@@ -1140,7 +1205,7 @@ app.get('/api/avaliacoes/:id',
       data: avaliacao
     });
   } catch (error) {
-    console.error('❌ Erro ao buscar avaliação:', error);
+    logger.error('❌ Erro ao buscar avaliação:', error);
     res.status(500).json({
       error: 'Erro ao buscar avaliação',
       message: error instanceof Error ? error.message : 'Erro desconhecido'
@@ -1165,7 +1230,7 @@ app.get('/api/estatisticas',
       pastoral: req.pastoral?.name
     });
   } catch (error) {
-    console.error('❌ Erro ao buscar estatísticas:', error);
+    logger.error('❌ Erro ao buscar estatísticas:', error);
     res.status(500).json({
       error: 'Erro ao buscar estatísticas',
       message: error instanceof Error ? error.message : 'Erro desconhecido'
@@ -1184,7 +1249,7 @@ app.get('/api/pastoral/interessados',
     const pastoralId = req.pastoral?.id;
     const interessados = getInteressadosPastoral(pastoralId);
 
-    console.log(`📋 Buscando interessados na Pastoral: ${interessados.length} encontrado(s)`);
+    logger.info(`📋 Buscando interessados na Pastoral: ${interessados.length} encontrado(s)`);
 
     res.json({
       success: true,
@@ -1193,7 +1258,7 @@ app.get('/api/pastoral/interessados',
       message: `${interessados.length} pessoa(s) interessada(s) encontrada(s)`
     });
   } catch (error) {
-    console.error('❌ Erro ao buscar interessados:', error);
+    logger.error('❌ Erro ao buscar interessados:', error);
     res.status(500).json({
       error: 'Erro ao buscar interessados',
       message: error instanceof Error ? error.message : 'Erro desconhecido'
@@ -1212,7 +1277,7 @@ app.get('/api/contatos',
     const pastoralId = req.pastoral?.id;
     const contatos = getTodosContatos(pastoralId);
 
-    console.log(`📞 Buscando todos os contatos: ${contatos.length} encontrado(s)`);
+    logger.info(`📞 Buscando todos os contatos: ${contatos.length} encontrado(s)`);
 
     res.json({
       success: true,
@@ -1221,7 +1286,7 @@ app.get('/api/contatos',
       message: `${contatos.length} contato(s) encontrado(s)`
     });
   } catch (error) {
-    console.error('❌ Erro ao buscar contatos:', error);
+    logger.error('❌ Erro ao buscar contatos:', error);
     res.status(500).json({
       error: 'Erro ao buscar contatos',
       message: error instanceof Error ? error.message : 'Erro desconhecido'
@@ -1255,10 +1320,10 @@ app.post('/api/encontros',
     const encontroId = createEncontro(encontro, pastoralId);
     const novoEncontro = getEncontroById(encontroId, pastoralId) as Encontro | undefined;
 
-    console.log(`✅ Novo encontro criado com ID: ${encontroId}`);
-    console.log(`   Nome: ${encontro.nome}`);
-    console.log(`   Pastoral: ${req.pastoral.name}`);
-    console.log(`   Código de acesso: ${novoEncontro?.codigo_acesso}`);
+    logger.info(`✅ Novo encontro criado com ID: ${encontroId}`);
+    logger.info(`   Nome: ${encontro.nome}`);
+    logger.info(`   Pastoral: ${req.pastoral.name}`);
+    logger.info(`   Código de acesso: ${novoEncontro?.codigo_acesso}`);
 
     res.status(201).json({
       success: true,
@@ -1286,7 +1351,7 @@ app.get('/api/encontros',
       data: encontros
     });
   } catch (error) {
-    console.error('❌ Erro ao buscar encontros:', error);
+    logger.error('❌ Erro ao buscar encontros:', error);
     res.status(500).json({
       error: 'Erro ao buscar encontros',
       message: error instanceof Error ? error.message : 'Erro desconhecido'
@@ -1326,7 +1391,7 @@ app.get('/api/encontros/:id',
       data: encontro
     });
   } catch (error) {
-    console.error('❌ Erro ao buscar encontro:', error);
+    logger.error('❌ Erro ao buscar encontro:', error);
     res.status(500).json({
       error: 'Erro ao buscar encontro',
       message: error instanceof Error ? error.message : 'Erro desconhecido'
@@ -1352,7 +1417,7 @@ app.get('/api/encontros/codigo/:codigo', (req, res) => {
       data: encontro
     });
   } catch (error) {
-    console.error('❌ Erro ao buscar encontro por código:', error);
+    logger.error('❌ Erro ao buscar encontro por código:', error);
     res.status(500).json({
       error: 'Erro ao buscar encontro',
       message: error instanceof Error ? error.message : 'Erro desconhecido'
@@ -1389,7 +1454,7 @@ app.put('/api/encontros/:id',
 
     const encontroAtualizado = getEncontroById(id);
 
-    console.log(`✅ Encontro ${id} atualizado com sucesso`);
+    logger.info(`✅ Encontro ${id} atualizado com sucesso`);
 
     res.json({
       success: true,
@@ -1425,7 +1490,7 @@ app.delete('/api/encontros/:id',
       });
     }
 
-    console.log(`✅ Encontro ${id} deletado com sucesso`);
+    logger.info(`✅ Encontro ${id} deletado com sucesso`);
 
     res.json({
       success: true,
@@ -1458,7 +1523,7 @@ app.get('/api/encontros/:id/estatisticas',
       data: stats
     });
   } catch (error) {
-    console.error('❌ Erro ao buscar estatísticas do encontro:', error);
+    logger.error('❌ Erro ao buscar estatísticas do encontro:', error);
     res.status(500).json({
       error: 'Erro ao buscar estatísticas',
       message: error instanceof Error ? error.message : 'Erro desconhecido'
@@ -1491,7 +1556,7 @@ app.get('/api/encontros/:id/avaliacoes',
       data: avaliacoes
     });
   } catch (error) {
-    console.error('❌ Erro ao buscar avaliações do encontro:', error);
+    logger.error('❌ Erro ao buscar avaliações do encontro:', error);
     res.status(500).json({
       error: 'Erro ao buscar avaliações',
       message: error instanceof Error ? error.message : 'Erro desconhecido'
@@ -1526,7 +1591,7 @@ app.get('/api/config', (req, res) => {
       }
     });
   } catch (error) {
-    console.error('❌ Erro ao buscar configuração:', error);
+    logger.error('❌ Erro ao buscar configuração:', error);
     res.status(500).json({
       error: 'Erro ao buscar configuração',
       message: error instanceof Error ? error.message : 'Erro desconhecido'
@@ -1548,7 +1613,7 @@ app.get('/api/admin/pastorais',
       data: pastorais
     });
   } catch (error) {
-    console.error('❌ Erro ao buscar pastorais:', error);
+    logger.error('❌ Erro ao buscar pastorais:', error);
     res.status(500).json({
       error: 'Erro ao buscar pastorais',
       message: error instanceof Error ? error.message : 'Erro desconhecido'
@@ -1585,7 +1650,7 @@ app.get('/api/admin/pastorais/:id',
       data: pastoral
     });
   } catch (error) {
-    console.error('❌ Erro ao buscar pastoral:', error);
+    logger.error('❌ Erro ao buscar pastoral:', error);
     res.status(500).json({
       error: 'Erro ao buscar pastoral',
       message: error instanceof Error ? error.message : 'Erro desconhecido'
@@ -1626,9 +1691,9 @@ app.post('/api/admin/pastorais',
       config
     });
 
-    console.log(`✅ Nova pastoral criada com ID: ${pastoralId}`);
-    console.log(`   Nome: ${name}`);
-    console.log(`   Subdomínio: ${subdomain}`);
+    logger.info(`✅ Nova pastoral criada com ID: ${pastoralId}`);
+    logger.info(`   Nome: ${name}`);
+    logger.info(`   Subdomínio: ${subdomain}`);
 
     res.status(201).json({
       success: true,
@@ -1636,7 +1701,7 @@ app.post('/api/admin/pastorais',
       id: pastoralId
     });
   } catch (error) {
-    console.error('❌ Erro ao criar pastoral:', error);
+    logger.error('❌ Erro ao criar pastoral:', error);
     res.status(500).json({
       error: 'Erro ao criar pastoral',
       message: error instanceof Error ? error.message : 'Erro desconhecido'
@@ -1683,14 +1748,14 @@ app.put('/api/admin/pastorais/:id',
 
     updatePastoral(id, { name, subdomain, logoUrl, config });
 
-    console.log(`✅ Pastoral ${id} atualizada com sucesso`);
+    logger.info(`✅ Pastoral ${id} atualizada com sucesso`);
 
     res.json({
       success: true,
       message: 'Pastoral atualizada com sucesso!'
     });
   } catch (error) {
-    console.error('❌ Erro ao atualizar pastoral:', error);
+    logger.error('❌ Erro ao atualizar pastoral:', error);
     res.status(500).json({
       error: 'Erro ao atualizar pastoral',
       message: error instanceof Error ? error.message : 'Erro desconhecido'
@@ -1733,14 +1798,14 @@ app.put('/api/admin/pastorais/:id/config',
 
     updatePastoralConfig(id, config);
 
-    console.log(`✅ Configuração da pastoral ${id} atualizada`);
+    logger.info(`✅ Configuração da pastoral ${id} atualizada`);
 
     res.json({
       success: true,
       message: 'Configuração atualizada com sucesso!'
     });
   } catch (error) {
-    console.error('❌ Erro ao atualizar configuração:', error);
+    logger.error('❌ Erro ao atualizar configuração:', error);
     res.status(500).json({
       error: 'Erro ao atualizar configuração',
       message: error instanceof Error ? error.message : 'Erro desconhecido'
@@ -1783,14 +1848,14 @@ app.delete('/api/admin/pastorais/:id',
 
     deletePastoral(id);
 
-    console.log(`✅ Pastoral ${id} excluída com sucesso`);
+    logger.info(`✅ Pastoral ${id} excluída com sucesso`);
 
     res.json({
       success: true,
       message: 'Pastoral excluída com sucesso!'
     });
   } catch (error) {
-    console.error('❌ Erro ao excluir pastoral:', error);
+    logger.error('❌ Erro ao excluir pastoral:', error);
     res.status(500).json({
       error: 'Erro ao excluir pastoral',
       message: error instanceof Error ? error.message : 'Erro desconhecido'
@@ -1826,16 +1891,16 @@ app.use(errorHandler);
 
 // Iniciar servidor
 app.listen(PORT, () => {
-  console.log('');
-  console.log('═══════════════════════════════════════════════════════');
-  console.log('  🙏 API - Avaliação do Encontro de Noivos');
-  console.log('  📍 Paróquia São Benedito - Alto da Ponte');
-  console.log('═══════════════════════════════════════════════════════');
-  console.log(`  ✅ Servidor rodando em: http://localhost:${PORT}`);
-  console.log(`  📊 Health check: http://localhost:${PORT}/api/health`);
-  console.log(`  💾 Banco de dados: SQLite (avaliacoes.db)`);
-  console.log('═══════════════════════════════════════════════════════');
-  console.log('');
+  logger.info('');
+  logger.info('═══════════════════════════════════════════════════════');
+  logger.info('  🙏 API - Avaliação do Encontro de Noivos');
+  logger.info('  📍 Paróquia São Benedito - Alto da Ponte');
+  logger.info('═══════════════════════════════════════════════════════');
+  logger.info(`  ✅ Servidor rodando em: http://localhost:${PORT}`);
+  logger.info(`  📊 Health check: http://localhost:${PORT}/api/health`);
+  logger.info(`  💾 Banco de dados: SQLite (avaliacoes.db)`);
+  logger.info('═══════════════════════════════════════════════════════');
+  logger.info('');
 });
 
 export default app;

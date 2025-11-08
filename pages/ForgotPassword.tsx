@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
+import { addCsrfHeader } from '../src/hooks/useCsrf';
 
 export default function ForgotPassword() {
   const [email, setEmail] = useState('');
@@ -14,9 +15,10 @@ export default function ForgotPassword() {
     try {
       const response = await fetch('/api/auth/forgot-password', {
         method: 'POST',
-        headers: {
+        headers: addCsrfHeader({
           'Content-Type': 'application/json'
-        },
+        }),
+        credentials: 'include',
         body: JSON.stringify({ email })
       });
 
