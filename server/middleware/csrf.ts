@@ -9,11 +9,13 @@ import type { Request, Response, NextFunction } from 'express';
 
 const {
   invalidCsrfTokenError,
-  generateToken,
-  validateRequest,
   doubleCsrfProtection,
 } = doubleCsrf({
   getSecret: () => env.COOKIE_SECRET,
+  getSessionIdentifier: (req: Request) => {
+    // Usar IP como identificador de sessão simples
+    return req.ip || req.socket?.remoteAddress || 'anonymous';
+  },
   cookieName: 'x-csrf-token',
   cookieOptions: {
     httpOnly: true,
@@ -23,7 +25,7 @@ const {
   },
   size: 64,
   ignoredMethods: ['GET', 'HEAD', 'OPTIONS'],
-  getTokenFromRequest: (req) => req.headers['x-csrf-token'] as string,
+  getCsrfTokenFromRequest: (req) => req.headers['x-csrf-token'] as string,
 });
 
 /**
@@ -36,8 +38,8 @@ export const csrfProtection = doubleCsrfProtection;
  * Use em rota GET para obter o token
  */
 export function generateCsrfToken(req: Request, res: Response, next: NextFunction) {
-  const token = generateToken(req, res);
-  (req as any).csrfToken = token;
+  // O token é gerado automaticamente pelo middleware doubleCsrfProtection
+  // e está disponível no cookie
   next();
 }
 

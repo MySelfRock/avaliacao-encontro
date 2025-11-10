@@ -11,7 +11,7 @@ dotenv.config();
 const envSchema = z.object({
   // Servidor
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
-  PORT: z.string().transform(Number).default('3001'),
+  PORT: z.string().transform(Number).default(3001),
 
   // Frontend URL (para links de reset de senha)
   FRONTEND_URL: z.string().url().default('http://localhost:5173'),
@@ -62,7 +62,7 @@ export function validateEnv() {
   } catch (error) {
     if (error instanceof z.ZodError) {
       console.error('❌ Erro de configuração - Variáveis de ambiente inválidas:');
-      error.errors.forEach(err => {
+      error.issues.forEach(err => {
         console.error(`   - ${err.path.join('.')}: ${err.message}`);
       });
       console.error('\n📝 Verifique o arquivo .env e certifique-se de que todas as variáveis obrigatórias estão configuradas.');

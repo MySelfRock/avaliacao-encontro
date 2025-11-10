@@ -466,15 +466,3 @@ export function resetPasswordWithToken(token: string, newPassword: string): { su
   };
 }
 
-/**
- * Envia email de reset de senha (simulado)
- */
-export function sendPasswordResetEmail(email: string, token: string): void {
-  // TODO: Implementar envio de email real usando serviço SMTP
-  // Por exemplo: SendGrid, AWS SES, Nodemailer, etc.
-
-  console.log('📧 EMAIL SIMULADO - Password Reset');
-  console.log(`Para: ${email}`);
-  console.log(`Assunto: Redefinição de Senha`);
-  console.log(`Link: http://localhost:5173/reset-password?token=${token}`);
-}

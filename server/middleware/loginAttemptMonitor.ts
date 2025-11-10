@@ -150,7 +150,7 @@ export function cleanupOldAttempts(): void {
 /**
  * Middleware para verificar bloqueio antes de tentar login
  */
-export function checkLoginAttempts(req: Request, res: Response, next: NextFunction): void {
+export function checkLoginAttempts(req: Request, res: Response, next: NextFunction): Response | void {
   const email = req.body.email;
   const ipAddress = req.ip || req.socket.remoteAddress || 'unknown';
 
