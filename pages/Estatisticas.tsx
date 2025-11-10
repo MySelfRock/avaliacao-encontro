@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { API_ENDPOINTS } from '../config/api';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { QRCodeGenerator } from '../components/QRCodeGenerator';
 
 interface Estatisticas {
   totalAvaliacoes: number;
@@ -669,6 +670,9 @@ export function Estatisticas() {
     '': 'Não respondeu'
   };
 
+  // Obter URL completa para o QR Code
+  const formUrl = window.location.origin;
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-pastoral-blue-50 to-blue-50 p-4 sm:p-8">
       <div className="max-w-7xl mx-auto">
@@ -689,6 +693,14 @@ export function Estatisticas() {
             </svg>
             Baixar Relatório em PDF
           </button>
+        </div>
+
+        {/* QR Code para Avaliação */}
+        <div className="mb-8">
+          <QRCodeGenerator
+            url={formUrl}
+            title="QR Code para Avaliação"
+          />
         </div>
 
         {/* Total de Avaliações */}
