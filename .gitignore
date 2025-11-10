@@ -38,3 +38,4 @@ yarn-error.log*
 tmp/
 temp/
 *.tmp
+logs/*.log
