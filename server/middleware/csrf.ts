@@ -9,11 +9,12 @@ import type { Request, Response, NextFunction } from 'express';
 
 const {
   invalidCsrfTokenError,
-  generateToken,
+  generateCsrfToken: generateToken,
   validateRequest,
   doubleCsrfProtection,
 } = doubleCsrf({
   getSecret: () => env.COOKIE_SECRET,
+  getSessionIdentifier: (req) => req.ip || req.socket.remoteAddress || 'unknown',
   cookieName: 'x-csrf-token',
   cookieOptions: {
     httpOnly: true,
@@ -23,7 +24,7 @@ const {
   },
   size: 64,
   ignoredMethods: ['GET', 'HEAD', 'OPTIONS'],
-  getTokenFromRequest: (req) => req.headers['x-csrf-token'] as string,
+  getCsrfTokenFromRequest: (req) => req.headers['x-csrf-token'] as string,
 });
 
 /**

@@ -376,9 +376,15 @@ export async function initiatePasswordReset(email: string, ipAddress?: string): 
   });
 
   // Enviar email com link de reset
-  const emailSent = await sendPasswordResetEmail(email, user.name, resetToken);
+  try {
+    const emailSent = await sendPasswordResetEmail(email, user.name, resetToken);
 
-  if (!emailSent) {
+    if (emailSent) {
+      console.log(`✅ Email de reset enviado com sucesso para: ${email}`);
+    } else {
+      throw new Error('Failed to send email');
+    }
+  } catch (error) {
     console.warn(`⚠️  Falha ao enviar email de reset para: ${email}`);
     // Em desenvolvimento, logar no console como fallback
     console.log('========================================');
@@ -389,8 +395,6 @@ export async function initiatePasswordReset(email: string, ipAddress?: string): 
     console.log(`Token: ${resetToken}`);
     console.log(`Expira em: ${expiresAt.toISOString()}`);
     console.log('========================================');
-  } else {
-    console.log(`✅ Email de reset enviado com sucesso para: ${email}`);
   }
 
   return {
@@ -466,15 +470,3 @@ export function resetPasswordWithToken(token: string, newPassword: string): { su
   };
 }
 
-/**
- * Envia email de reset de senha (simulado)
- */
-export function sendPasswordResetEmail(email: string, token: string): void {
-  // TODO: Implementar envio de email real usando serviço SMTP
-  // Por exemplo: SendGrid, AWS SES, Nodemailer, etc.
-
-  console.log('📧 EMAIL SIMULADO - Password Reset');
-  console.log(`Para: ${email}`);
-  console.log(`Assunto: Redefinição de Senha`);
-  console.log(`Link: http://localhost:5173/reset-password?token=${token}`);
-}
