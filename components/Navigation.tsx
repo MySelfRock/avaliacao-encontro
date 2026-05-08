@@ -1,27 +1,21 @@
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthContext';
+import { ThemeToggle } from './ThemeToggle';
 
 export const Navigation: React.FC = () => {
   const location = useLocation();
+  const { user, logout } = useAuth();
 
   const isActive = (path: string) => location.pathname === path;
 
-  const navItems = [
+const navItems = [
     {
       path: '/admin/encontros',
       label: 'Encontros',
       icon: (
         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>
-        </svg>
-      )
-    },
-    {
-      path: '/',
-      label: 'Avaliação',
-      icon: (
-        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
         </svg>
       )
     },
@@ -42,6 +36,15 @@ export const Navigation: React.FC = () => {
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/>
         </svg>
       )
+    },
+    {
+      path: '/export',
+      label: 'Exportar',
+      icon: (
+        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+        </svg>
+      )
     }
   ];
 
@@ -57,13 +60,13 @@ export const Navigation: React.FC = () => {
               </svg>
             </div>
             <div>
-              <h1 className="text-lg font-bold text-pastoral-blue-800">Encontro de Noivos</h1>
+              <h1 className="text-lg font-bold text-pastoral-blue-800">Encontro de Santificação</h1>
               <p className="text-xs text-gray-500">Paróquia São Benedito</p>
             </div>
           </div>
 
           {/* Menu de Navegação */}
-          <div className="flex gap-2">
+          <div className="flex gap-2 items-center">
             {navItems.map((item) => (
               <Link
                 key={item.path}
@@ -78,6 +81,25 @@ export const Navigation: React.FC = () => {
                 <span className="hidden sm:inline">{item.label}</span>
               </Link>
             ))}
+            <ThemeToggle />
+            {user && (
+              <div className="flex items-center gap-2 ml-2 pl-4 border-l">
+                <Link
+                  to="/perfil"
+                  className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:text-pastoral-blue-700"
+                >
+                  <span className="font-medium">{user.name}</span>
+                </Link>
+                <button
+                  onClick={logout}
+                  className="flex items-center gap-2 px-3 py-2 text-red-600 hover:text-red-700"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                  </svg>
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </div>

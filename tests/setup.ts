@@ -14,6 +14,12 @@ process.env.COOKIE_SECRET = 'test-cookie-secret-for-testing-purposes-only';
 process.env.SENDGRID_API_KEY = 'SG.test-api-key';
 process.env.SENDGRID_FROM_EMAIL = 'test@example.com';
 process.env.SENDGRID_FROM_NAME = 'Test System';
+process.env.DB_HOST = 'localhost';
+process.env.DB_PORT = '3306';
+process.env.DB_USER = 'test';
+process.env.DB_PASSWORD = 'test';
+process.env.DB_NAME = 'test';
+process.env.DATABASE_URL = 'mysql://test:test@localhost:3306/test';
 
 // Mock do dotenv para não tentar carregar .env em testes
 jest.mock('dotenv', () => ({
@@ -24,7 +30,7 @@ jest.mock('dotenv', () => ({
   },
 }));
 
-// Mock do SendGrid para evitar chamadas reais em testes
+// Mock do @sendgrid/mail para evitar chamadas reais em testes
 jest.mock('@sendgrid/mail', () => ({
   setApiKey: jest.fn(),
   send: jest.fn().mockResolvedValue([{ statusCode: 202, body: '', headers: {} }]),

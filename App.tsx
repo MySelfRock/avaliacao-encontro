@@ -1,7 +1,11 @@
 import React from 'react';
 import { BrowserRouter, Routes, Route, useLocation, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { ToastProvider } from './contexts/ToastContext';
+import { ThemeProvider } from './contexts/ThemeContext';
 import { Navigation } from './components/Navigation';
+import { ToastContainer } from './components/Toast';
+import { ThemeToggle } from './components/ThemeToggle';
 import { AvaliacaoForm } from './pages/AvaliacaoForm';
 import { Estatisticas } from './pages/Estatisticas';
 import { Interessados } from './pages/Interessados';
@@ -14,6 +18,10 @@ import PastoralAdminDashboard from './pages/PastoralAdminDashboard';
 import SecurityDashboard from './pages/SecurityDashboard';
 import ForgotPassword from './pages/ForgotPassword';
 import ResetPassword from './pages/ResetPassword';
+import { Profile } from './pages/Profile';
+import { CasalDashboard } from './pages/CasalDashboard';
+import { Export } from './pages/Export';
+import { AvaliacaoPreview } from './pages/AvaliacaoPreview';
 
 // Protected Route Component
 function ProtectedRoute({ children, requiredRole }: {
@@ -162,6 +170,34 @@ function AppContent() {
             </ProtectedRoute>
           }
         />
+        <Route
+          path="/perfil"
+          element={
+            <ProtectedRoute>
+              <Profile />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/export"
+          element={
+            <ProtectedRoute>
+              <Export />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/casal/:codigo"
+          element={<CasalDashboard />}
+        />
+        <Route
+          path="/avaliacao/:id/preview"
+          element={
+            <ProtectedRoute>
+              <AvaliacaoPreview />
+            </ProtectedRoute>
+          }
+        />
       </Routes>
     </div>
   );
@@ -184,7 +220,12 @@ function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
-        <AppContent />
+        <ThemeProvider>
+          <ToastProvider>
+            <AppContent />
+            <ToastContainer />
+          </ToastProvider>
+        </ThemeProvider>
       </AuthProvider>
     </BrowserRouter>
   );

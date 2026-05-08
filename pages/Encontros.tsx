@@ -102,7 +102,7 @@ export function Encontros() {
               Gerenciar Encontros
             </h1>
             <p className="text-gray-600 mt-2">
-              Crie e gerencie encontros de noivos
+              Crie e gerencie encontros de santificação
             </p>
           </div>
           <Link
@@ -131,7 +131,7 @@ export function Encontros() {
               Nenhum encontro cadastrado
             </h3>
             <p className="text-gray-500 mb-6">
-              Comece criando seu primeiro encontro de noivos
+              Comece criando seu primeiro encontro de santificação
             </p>
             <Link
               to="/admin/encontros/novo"

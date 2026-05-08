@@ -1,0 +1,853 @@
+openapi: 3.0.0
+info:
+  title: Avaliação do Encontro de Noivos API
+  version: 1.0.0
+  description: API REST para sistema de avaliações de encontros de noivos
+  contact:
+    name: Suporte
+    email: suporte@avaliacoes.com
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: http://localhost:5000
+    description: Servidor de desenvolvimento
+  - url: https://api.avaliacoes.com
+    description: Servidor de produção
+
+tags:
+  - name: auth
+    description: Endpoints de autenticação
+  - name: avaliacoes
+    description: Avaliações
+  - name: encontros
+    description: Encontros
+  - name: pastorais
+    description: Pastorais
+  - name: interessados
+    description: Interested couples
+  - name: admin
+    description: Administração (requires super_admin)
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+security:
+  - bearerAuth: []
+
+paths:
+  # ========================================
+  # AUTH
+  # ========================================
+  /api/auth/login:
+    post:
+      tags:
+        - auth
+      summary: Login de usuário
+      description: Autentica usuário com email e senha, retorna token JWT
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+                - password
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: admin@pastoral.org
+                password:
+                  type: string
+                  format: password
+                  example: Senha123
+      responses:
+        '200':
+          description: Login bem-sucedido
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '400':
+          description: Dados inválidos
+        '401':
+          description: Credenciais incorretas
+
+  /api/auth/register:
+    post:
+      tags:
+        - auth
+      summary: Registrar novo usuário
+      description: Cria novo usuário (apenas super_admin)
+      operationId: registerUser
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+                - password
+                - name
+              properties:
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+                  minLength: 8
+                name:
+                  type: string
+                role:
+                  type: string
+                  enum: [super_admin, pastoral_admin]
+                pastoral_id:
+                  type: integer
+      responses:
+        '201':
+          description: Usuário criado
+        '400':
+          description: Dados inválidos
+        '409':
+          description: Email já existe
+
+  /api/auth/forgot-password:
+    post:
+      tags:
+        - auth
+      summary: Esqueci minha senha
+      description: Envia email com link de recuperação
+      operationId: forgotPassword
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+              properties:
+                email:
+                  type: string
+                  format: email
+      responses:
+        '200':
+          description: Email enviado se existir
+
+  /api/auth/reset-password:
+    post:
+      tags:
+        - auth
+      summary: Redefinir senha
+      operationId: resetPassword
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - token
+                - password
+              properties:
+                token:
+                  type: string
+                password:
+                  type: string
+                  minLength: 8
+      responses:
+        '200':
+          description: Senha redefinida
+        '400':
+          description: Token_inválido ou senha fraca
+
+  /api/auth/logout:
+    post:
+      tags:
+        - auth
+      summary: Logout
+      description: Revoga token atual
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Logged out
+
+  /api/auth/refresh:
+    post:
+      tags:
+        - auth
+      summary: Refresh token
+      description: Renova access token
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - refreshToken
+              properties:
+                refreshToken:
+                  type: string
+      responses:
+        '200':
+          description: Novo access token
+
+  # ========================================
+  # ENCONTROS
+  # ========================================
+  /api/encontros:
+    get:
+      tags:
+        - encontros
+      summary: Listar encontros
+      description: Retorna lista paginada de encontros
+      operationId: getEncontros
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [planejado, em_andamento, concluido, cancelado]
+        - name: startDate
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: endDate
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: search
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Lista de encontros
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedEncontros'
+
+    post:
+      tags:
+        - encontros
+      summary: Criar encontro
+      description: Cria novo encontro (pastoral_admin)
+      operationId: createEncontro
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateEncontro'
+      responses:
+        '201':
+          description: Encontro criado
+        '400':
+          description: Dados inválidos
+
+  /api/encontros/{id}:
+    get:
+      tags:
+        - encontros
+      summary: Buscar encontro por ID
+      operationId: getEncontroById
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Encontro encontrado
+        '404':
+          description: Não encontrado
+
+    put:
+      tags:
+        - encontros
+      summary: Atualizar encontro
+      operationId: updateEncontro
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateEncontro'
+      responses:
+        '200':
+          description: Atualizado
+        '404':
+          description: Não encontrado
+
+    delete:
+      tags:
+        - encontros
+      summary: Deletar encontro
+      operationId: deleteEncontro
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Deletado
+        '404':
+          description: Não encontrado
+
+  /api/encontros/codigo/{codigo}:
+    get:
+      tags:
+        - encontros
+      summary: Buscar encontro por código público
+      description: Endpoint público para QR Code
+      operationId: getEncontroByCodigo
+      parameters:
+        - name: codigo
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Encontro encontrado
+        '404':
+          description: Código inválido
+
+  # ========================================
+  # AVALIACOES
+  # ========================================
+  /api/avaliacoes:
+    get:
+      tags:
+        - avaliacoes
+      summary: Listar avaliações
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+        - name: limit
+          in: query
+          schema:
+            type: integer
+        - name: encounter_id
+          in: query
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Lista de avaliações
+
+    post:
+      tags:
+        - avaliacoes
+      summary: Criar avaliação
+      description: Endpoint público para参赛 avaliação
+      operationId: createAvaliacao
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Avaliacao'
+      responses:
+        '201':
+          description: Avaliação criada
+        '400':
+          description: Dados inválidos
+
+  /api/avaliacoes/{id}:
+    get:
+      tags:
+        - avaliacoes
+      summary: Buscar avaliação por ID
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Avaliação encontrada
+        '404':
+          description: Não encontrada
+
+  # ========================================
+  # PASTORAIS
+  # ========================================
+  /api/pastorais:
+    get:
+      tags:
+        - pastorais
+      summary: Listar pastorais
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Lista de pastorais
+
+    post:
+      tags:
+        - pastorais
+      summary: Criar pastoral
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Pastoral'
+      responses:
+        '201':
+          description: Pastoral criada
+
+  /api/pastorais/{id}:
+    get:
+      tags:
+        - pastorais
+      summary: Buscar pastoral por ID
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Pastoral encontrada
+
+    put:
+      tags:
+        - pastorais
+      summary: Atualizar pastoral
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PastoralUpdate'
+      responses:
+        '200':
+          description: Atualizada
+        '403':
+          description: Não autorizado
+
+    delete:
+      tags:
+        - pastorais
+      summary: Deletar pastoral
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Deletada
+        '403':
+          description: Não autorizado
+
+  # ========================================
+  # INTERESSADOS
+  # ========================================
+  /api/interessados:
+    get:
+      tags:
+        - interessados
+      summary: Listar interessados
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: encounter_id
+          in: query
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Lista de interessados
+
+  # ========================================
+  # ADMIN
+  # ========================================
+  /api/admin/backup:
+    get:
+      tags:
+        - admin
+      summary: Gerar backup completo
+      description: Gera backup JSON completo do sistema
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: users
+          in: query
+          schema:
+            type: boolean
+            default: true
+        - name: audit
+          in: query
+          schema:
+            type: boolean
+            default: true
+        - name: format
+          in: query
+          schema:
+            type: string
+            enum: [json, txt]
+      responses:
+        '200':
+          description: Backup gerado
+
+  /api/admin/export:
+    get:
+      tags:
+        - admin
+      summary: Exportar dados
+      description: Exporta dados em CSV ou JSON
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: type
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [avaliacoes, encontros, interessados]
+        - name: format
+          in: query
+          schema:
+            type: string
+            enum: [csv, json]
+            default: csv
+      responses:
+        '200':
+          description: Arquivo exportado
+          content:
+            text/csv:
+              schema:
+                type: string
+            application/json:
+              schema:
+                type: object
+
+  /api/admin/users:
+    get:
+      tags:
+        - admin
+      summary: Listar usuários
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Lista de usuários
+
+    post:
+      tags:
+        - admin
+      summary: Criar usuário
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+                - password
+                - name
+              properties:
+                email:
+                  type: string
+                password:
+                  type: string
+                name:
+                  type: string
+                role:
+                  type: string
+                pastoral_id:
+                  type: integer
+      responses:
+        '201':
+          description: Usuário criado
+
+  /api/admin/users/{id}:
+    delete:
+      tags:
+        - admin
+      summary: Deletar usuário
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Usuário deletado
+
+  /api/admin/estatisticas:
+    get:
+      tags:
+        - admin
+      summary: Estatísticas gerais
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Estatísticas
+
+# ========================================
+# SCHEMAS
+# ========================================
+components:
+  schemas:
+    LoginResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        token:
+          type: string
+        refreshToken:
+          type: string
+        user:
+          type: object
+          properties:
+            id:
+              type: integer
+            email:
+              type: string
+            name:
+              type: string
+            role:
+              type: string
+
+    PaginatedEncontros:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Encontro'
+        pagination:
+          type: object
+          properties:
+            page:
+              type: integer
+            limit:
+              type: integer
+            total:
+              type: integer
+            totalPages:
+              type: integer
+
+    Encontro:
+      type: object
+      properties:
+        id:
+          type: integer
+        nome:
+          type: string
+        tema:
+          type: string
+        data_inicio:
+          type: string
+          format: date
+        data_fim:
+          type: string
+          format: date
+        local:
+          type: string
+        status:
+          type: string
+        codigo_acesso:
+          type: string
+
+    CreateEncontro:
+      type: object
+      required:
+        - nome
+        - data_inicio
+        - data_fim
+      properties:
+        nome:
+          type: string
+        tema:
+          type: string
+        data_inicio:
+          type: string
+          format: date
+        data_fim:
+          type: string
+          format: date
+        local:
+          type: string
+        pastoral_id:
+          type: integer
+        status:
+          type: string
+          enum: [planejado, em_andamento, concluido, cancelado]
+
+    UpdateEncontro:
+      type: object
+      properties:
+        nome:
+          type: string
+        tema:
+          type: string
+        data_inicio:
+          type: string
+        data_fim:
+          type: string
+        local:
+          type: string
+        status:
+          type: string
+
+    Avaliacao:
+      type: object
+      properties:
+        encounter_id:
+          type: integer
+        basicInfo:
+          type: object
+          properties:
+            coupleName:
+              type: string
+            encounterDate:
+              type: string
+        preEncontro:
+          type: object
+          properties:
+            communicationClarity:
+              type: integer
+              minimum: 1
+              maximum: 5
+            registrationEase:
+              type: integer
+              minimum: 1
+              maximum: 5
+            comments:
+              type: string
+        duranteEncontro:
+          type: object
+          properties:
+            palestras:
+              type: object
+            ambientes:
+              type: object
+            refeicoes:
+              type: object
+            musicas:
+              type: object
+            equipe:
+              type: object
+        posEncontro:
+          type: object
+          properties:
+            geral:
+              type: object
+            pastoral:
+              type: object
+            finalMessage:
+              type: string
+
+    Pastoral:
+      type: object
+      required:
+        - name
+        - subdomain
+      properties:
+        name:
+          type: string
+        subdomain:
+          type: string
+        logo_url:
+          type: string
+        primary_color:
+          type: string
+        is_active:
+          type: boolean
+
+    PastoralUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+        logo_url:
+          type: string
+        primary_color:
+          type: string
+        is_active:
+          type: boolean

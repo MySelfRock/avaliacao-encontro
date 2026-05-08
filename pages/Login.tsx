@@ -67,7 +67,7 @@ export default function Login() {
             Sistema de Avaliações
           </h2>
           <p className="mt-2 text-center text-sm text-gray-600">
-            Pastoral Familiar - Encontro de Noivos
+            Pastoral Familiar - Encontro de Santificação
           </p>
         </div>
 

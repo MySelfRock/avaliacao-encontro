@@ -1,7 +1,7 @@
-# Avaliação do Encontro de Noivos
+# Avaliação do Encontro de Santificação
 ## Paróquia São Benedito - Diocese de São José dos Campos - Pastoral Familiar
 
-Sistema de avaliação online para o Encontro de Noivos, com armazenamento em banco de dados SQLite.
+Sistema de avaliação online para o Encontro de Santificação, com armazenamento em banco de dados SQLite.
 
 ---
 
@@ -340,7 +340,42 @@ taskkill /F /PID [PID]
 
 ---
 
-## 👥 Contato
+## 🧪 Testes
+
+### Testes Unitários
+```bash
+npm run test:unit
+```
+
+### Testes de Integração
+```bash
+npm install --save-dev supertest @types/supertest
+npm run test:integration
+```
+
+### Testes E2E (Playwright)
+```bash
+npm install --save-dev @playwright/test
+npx playwright install --with-deps
+npx playwright test
+```
+
+### Executar todos os testes
+```bash
+npm test
+```
+
+---
+
+## 📚 Documentação da API
+
+A documentação OpenAPI está disponível em:
+- `docs/openapi.yaml` - Especificação OpenAPI 3.0
+- `server/routes/openapi.ts` - Endpoint de documentação JSON
+
+### Endpoints de API
+
+#### Autenticação
 
 **Paróquia São Benedito**
 Alto da Ponte - São José dos Campos

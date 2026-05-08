@@ -320,7 +320,7 @@ export function AvaliacaoForm() {
           )}
 
           <h1 className="text-4xl sm:text-5xl font-bold bg-gradient-to-r from-pastoral-blue-700 to-pastoral-blue-500 bg-clip-text text-transparent mb-4">
-            Avaliação do Encontro de Noivos
+            Avaliação do Encontro de Santificação
           </h1>
           <p className="mt-4 text-lg text-gray-700 max-w-2xl mx-auto leading-relaxed">
             Seu feedback é essencial para o crescimento da nossa pastoral.
@@ -684,7 +684,7 @@ export function AvaliacaoForm() {
                   }
                 />
               </QuestionRow>
-              <QuestionRow label="Qual sua nota geral para o Encontro de Noivos?">
+              <QuestionRow label="Qual sua nota geral para o Encontro de Santificação?">
                 <StarRating
                   rating={formData.posEncontro.geral.overallRating}
                   onRatingChange={(v) =>
