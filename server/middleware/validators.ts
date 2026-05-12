@@ -199,7 +199,7 @@ export const createEncontroValidation = [
     }),
   body('status')
     .optional()
-    .isIn(['planejado', 'ativo', 'concluido', 'cancelado']).withMessage('Status inválido'),
+    .isIn(['planejado', 'em_andamento', 'concluido', 'cancelado']).withMessage('Status inválido'),
   validate
 ];
 

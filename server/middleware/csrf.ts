@@ -9,11 +9,10 @@ import type { Request, Response, NextFunction } from 'express';
 
 const {
   invalidCsrfTokenError,
-  generateToken,
-  validateRequest,
   doubleCsrfProtection,
 } = doubleCsrf({
   getSecret: () => env.COOKIE_SECRET,
+  getSessionIdentifier: (req) => (req as any).user?.userId?.toString() || 'anonymous',
   cookieName: 'x-csrf-token',
   cookieOptions: {
     httpOnly: true,
@@ -22,8 +21,6 @@ const {
     maxAge: 24 * 60 * 60 * 1000, // 24 horas
   },
   size: 64,
-  ignoredMethods: ['GET', 'HEAD', 'OPTIONS'],
-  getTokenFromRequest: (req) => req.headers['x-csrf-token'] as string,
 });
 
 /**
@@ -35,9 +32,8 @@ export const csrfProtection = doubleCsrfProtection;
  * Middleware para gerar token CSRF
  * Use em rota GET para obter o token
  */
-export function generateCsrfToken(req: Request, res: Response, next: NextFunction) {
-  const token = generateToken(req, res);
-  (req as any).csrfToken = token;
+export function generateCsrfToken(_req: Request, _res: Response, next: NextFunction) {
+  // CSRF tokens são gerenciados automaticamente pela biblioteca
   next();
 }
 
@@ -58,6 +54,6 @@ export function csrfErrorHandler(err: any, req: Request, res: Response, next: Ne
  * Middleware para rotas que não precisam de CSRF
  * (ex: rotas públicas de leitura, webhooks)
  */
-export function skipCsrf(req: Request, res: Response, next: NextFunction) {
+export function skipCsrf(_req: Request, _res: Response, next: NextFunction) {
   next();
 }

@@ -111,7 +111,7 @@ export function Estatisticas() {
 
       doc.setFontSize(12);
       doc.setTextColor(100, 100, 100);
-      doc.text('Encontros de Noivos - Paróquia São Benedito', pageWidth / 2, 28, { align: 'center' });
+      doc.text('Encontros de Santificação - Paróquia São Benedito', pageWidth / 2, 28, { align: 'center' });
 
       // Total de Avaliações
       doc.setFontSize(14);
@@ -682,7 +682,7 @@ export function Estatisticas() {
             📊 Estatísticas das Avaliações
           </h1>
           <p className="text-lg text-gray-700 mb-4">
-            Análise completa dos Encontros de Noivos
+            Análise completa dos Encontros de Santificação
           </p>
           <button
             onClick={exportToPDF}

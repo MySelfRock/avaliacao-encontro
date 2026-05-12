@@ -3,24 +3,27 @@ import type { Request, Response, NextFunction } from 'express';
 
 // Mock do express-validator
 const mockValidationResult = jest.fn();
+const mockBody = jest.fn(() => ({
+  trim: jest.fn().mockReturnThis(),
+  isEmail: jest.fn().mockReturnThis(),
+  normalizeEmail: jest.fn().mockReturnThis(),
+  isLength: jest.fn().mockReturnThis(),
+  matches: jest.fn().mockReturnThis(),
+  withMessage: jest.fn().mockReturnThis(),
+  isIn: jest.fn().mockReturnThis(),
+  optional: jest.fn().mockReturnThis(),
+  isInt: jest.fn().mockReturnThis(),
+  isISO8601: jest.fn().mockReturnThis(),
+  custom: jest.fn().mockReturnThis(),
+  customSanitizer: jest.fn().mockReturnThis(),
+  escape: jest.fn().mockReturnThis(),
+  stripLow: jest.fn().mockReturnThis(),
+}));
+
 jest.mock('express-validator', () => ({
-  body: jest.fn(() => ({
-    trim: jest.fn().mockReturnThis(),
-    isEmail: jest.fn().mockReturnThis(),
-    normalizeEmail: jest.fn().mockReturnThis(),
-    isLength: jest.fn().mockReturnThis(),
-    matches: jest.fn().mockReturnThis(),
-    withMessage: jest.fn().mockReturnThis(),
-    isIn: jest.fn().mockReturnThis(),
-    optional: jest.fn().mockReturnThis(),
-    isInt: jest.fn().mockReturnThis(),
-    isISO8601: jest.fn().mockReturnThis(),
-    custom: jest.fn().mockReturnThis(),
-  })),
-  param: jest.fn(() => ({
-    isInt: jest.fn().mockReturnThis(),
-    withMessage: jest.fn().mockReturnThis(),
-  })),
+  body: mockBody,
+  query: mockBody,
+  param: mockBody,
   validationResult: mockValidationResult,
 }));
 

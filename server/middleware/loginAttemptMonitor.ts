@@ -1,11 +1,23 @@
 import type { Request, Response, NextFunction } from 'express';
-import Database from 'better-sqlite3';
-import path from 'path';
+import type { Pool } from 'mysql2/promise';
 import { logger } from '../config/logger';
 
-// Usar o mesmo banco de dados da aplicação
-const dbPath = path.join(process.cwd(), 'avaliacoes.db');
-const db = new Database(dbPath);
+// Get pool from database module
+let pool: Pool | null = null;
+
+/**
+ * Initialize pool reference
+ */
+export function setMonitorPool(dbPool: Pool) {
+  pool = dbPool;
+}
+
+function getPool(): Pool {
+  if (!pool) {
+    throw new Error('Monitor pool not initialized');
+  }
+  return pool;
+}
 
 /**
  * Configurações de monitoramento
@@ -31,46 +43,64 @@ interface LoginAttempt {
 /**
  * Criar tabela de tentativas de login se não existir
  */
-export function initializeLoginAttemptsTable() {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS login_attempts (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      ip_address TEXT NOT NULL,
-      email TEXT NOT NULL,
-      success BOOLEAN NOT NULL DEFAULT 0,
-      attempted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      user_agent TEXT,
-      INDEX idx_login_attempts_ip (ip_address),
-      INDEX idx_login_attempts_email (email),
-      INDEX idx_login_attempts_time (attempted_at)
-    )
-  `);
+export async function initializeLoginAttemptsTable(): Promise<void> {
+  const conn = getPool();
 
-  logger.info('Login attempts monitoring table initialized');
+  try {
+    await conn.execute(`
+      CREATE TABLE IF NOT EXISTS login_attempts (
+        id INT PRIMARY KEY AUTO_INCREMENT,
+        ip_address VARCHAR(50) NOT NULL,
+        email VARCHAR(255) NOT NULL,
+        success BOOLEAN NOT NULL DEFAULT FALSE,
+        attempted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        user_agent TEXT,
+        INDEX idx_login_attempts_ip (ip_address),
+        INDEX idx_login_attempts_email (email),
+        INDEX idx_login_attempts_time (attempted_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+
+    logger.info('Login attempts monitoring table initialized');
+  } catch (error) {
+    logger.error('Failed to initialize login attempts table', {
+      event: 'db.error',
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+    throw error;
+  }
 }
 
 /**
  * Registrar tentativa de login
  */
-export function recordLoginAttempt(attempt: LoginAttempt): void {
-  const stmt = db.prepare(`
-    INSERT INTO login_attempts (ip_address, email, success, attempted_at, user_agent)
-    VALUES (?, ?, ?, ?, ?)
-  `);
+export async function recordLoginAttempt(attempt: LoginAttempt): Promise<void> {
+  const conn = getPool();
 
-  stmt.run(
-    attempt.ip_address,
-    attempt.email,
-    attempt.success ? 1 : 0,
-    attempt.attempted_at,
-    attempt.user_agent || null
-  );
+  try {
+    await conn.execute(
+      `INSERT INTO login_attempts (ip_address, email, success, attempted_at, user_agent)
+       VALUES (?, ?, ?, ?, ?)`,
+      [
+        attempt.ip_address,
+        attempt.email,
+        attempt.success ? 1 : 0,
+        attempt.attempted_at,
+        attempt.user_agent || null,
+      ]
+    );
 
-  if (!attempt.success) {
-    logger.warn('Failed login attempt', {
-      event: 'auth.failed_attempt',
-      ip: attempt.ip_address,
-      email: attempt.email,
+    if (!attempt.success) {
+      logger.warn('Failed login attempt', {
+        event: 'auth.failed_attempt',
+        ip: attempt.ip_address,
+        email: attempt.email,
+      });
+    }
+  } catch (error) {
+    logger.error('Failed to record login attempt', {
+      event: 'db.error',
+      error: error instanceof Error ? error.message : 'Unknown error',
     });
   }
 }
@@ -78,71 +108,96 @@ export function recordLoginAttempt(attempt: LoginAttempt): void {
 /**
  * Obter número de tentativas falhadas recentes
  */
-export function getRecentFailedAttempts(ipOrEmail: string, isEmail: boolean = false): number {
+export async function getRecentFailedAttempts(ipOrEmail: string, isEmail: boolean = false): Promise<number> {
+  const conn = getPool();
   const column = isEmail ? 'email' : 'ip_address';
   const windowStart = new Date();
   windowStart.setMinutes(windowStart.getMinutes() - CONFIG.WINDOW_MINUTES);
 
-  const stmt = db.prepare(`
-    SELECT COUNT(*) as count
-    FROM login_attempts
-    WHERE ${column} = ?
-      AND success = 0
-      AND attempted_at > ?
-  `);
+  try {
+    const [rows] = await conn.execute<any[]>(
+      `SELECT COUNT(*) as count
+       FROM login_attempts
+       WHERE ${column} = ?
+         AND success = FALSE
+         AND attempted_at > ?`,
+      [ipOrEmail, windowStart.toISOString()]
+    );
 
-  const result = stmt.get(ipOrEmail, windowStart.toISOString()) as { count: number };
-  return result.count;
+    return rows.length > 0 ? rows[0].count : 0;
+  } catch (error) {
+    logger.error('Failed to get recent failed attempts', {
+      event: 'db.error',
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+    return 0;
+  }
 }
 
 /**
  * Verificar se IP ou email está bloqueado
  */
-export function isBlocked(ipOrEmail: string, isEmail: boolean = false): boolean {
+export async function isBlocked(ipOrEmail: string, isEmail: boolean = false): Promise<boolean> {
+  const conn = getPool();
   const column = isEmail ? 'email' : 'ip_address';
   const windowStart = new Date();
   windowStart.setMinutes(windowStart.getMinutes() - CONFIG.WINDOW_MINUTES);
 
-  const stmt = db.prepare(`
-    SELECT COUNT(*) as count
-    FROM login_attempts
-    WHERE ${column} = ?
-      AND success = 0
-      AND attempted_at > ?
-  `);
+  try {
+    const [rows] = await conn.execute<any[]>(
+      `SELECT COUNT(*) as count
+       FROM login_attempts
+       WHERE ${column} = ?
+         AND success = FALSE
+         AND attempted_at > ?`,
+      [ipOrEmail, windowStart.toISOString()]
+    );
 
-  const result = stmt.get(ipOrEmail, windowStart.toISOString()) as { count: number };
+    const count = rows.length > 0 ? rows[0].count : 0;
 
-  if (result.count >= CONFIG.MAX_ATTEMPTS) {
-    logger.warn(`Blocked login attempt - too many failures`, {
-      event: 'security.account_locked',
-      [isEmail ? 'email' : 'ip']: ipOrEmail,
-      attempts: result.count,
+    if (count >= CONFIG.MAX_ATTEMPTS) {
+      logger.warn(`Blocked login attempt - too many failures`, {
+        event: 'security.account_locked',
+        [isEmail ? 'email' : 'ip']: ipOrEmail,
+        attempts: count,
+      });
+      return true;
+    }
+
+    return false;
+  } catch (error) {
+    logger.error('Failed to check if blocked', {
+      event: 'db.error',
+      error: error instanceof Error ? error.message : 'Unknown error',
     });
-    return true;
+    return false;
   }
-
-  return false;
 }
 
 /**
  * Limpar tentativas antigas (chamar periodicamente)
  */
-export function cleanupOldAttempts(): void {
+export async function cleanupOldAttempts(): Promise<void> {
+  const conn = getPool();
   const cutoffDate = new Date();
   cutoffDate.setHours(cutoffDate.getHours() - 24); // Manter apenas últimas 24h
 
-  const stmt = db.prepare(`
-    DELETE FROM login_attempts
-    WHERE attempted_at < ?
-  `);
+  try {
+    const [result] = await conn.execute<any>(
+      `DELETE FROM login_attempts WHERE attempted_at < ?`,
+      [cutoffDate.toISOString()]
+    );
 
-  const result = stmt.run(cutoffDate.toISOString());
-
-  if (result.changes > 0) {
-    logger.info('Cleaned up old login attempts', {
-      event: 'maintenance.cleanup',
-      removed: result.changes,
+    if (result.affectedRows > 0) {
+      logger.info('Cleaned up old login attempts', {
+        event: 'maintenance.cleanup',
+        removed: result.affectedRows,
+      });
+    }
+  } catch (error) {
+    logger.error('Failed to cleanup old login attempts', {
+      event: 'db.error',
+      error: error instanceof Error ? error.message : 'Unknown error',
     });
   }
 }
@@ -150,86 +205,101 @@ export function cleanupOldAttempts(): void {
 /**
  * Middleware para verificar bloqueio antes de tentar login
  */
-export function checkLoginAttempts(req: Request, res: Response, next: NextFunction): void {
+export async function checkLoginAttempts(req: Request, res: Response, next: NextFunction): Promise<void | Response> {
   const email = req.body.email;
   const ipAddress = req.ip || req.socket.remoteAddress || 'unknown';
 
-  // Verificar bloqueio por IP
-  if (isBlocked(ipAddress, false)) {
-    const remainingMinutes = CONFIG.LOCK_DURATION_MINUTES;
+  try {
+    // Verificar bloqueio por IP
+    const ipBlocked = await isBlocked(ipAddress, false);
+    if (ipBlocked) {
+      const remainingMinutes = CONFIG.LOCK_DURATION_MINUTES;
 
-    logger.warn('Login blocked - IP locked', {
-      event: 'security.login_blocked',
-      ip: ipAddress,
-      email,
-    });
+      logger.warn('Login blocked - IP locked', {
+        event: 'security.login_blocked',
+        ip: ipAddress,
+        email,
+      });
 
-    return res.status(429).json({
-      success: false,
-      message: `Muitas tentativas de login falhadas. Aguarde ${remainingMinutes} minutos.`,
-      lockedUntil: new Date(Date.now() + remainingMinutes * 60 * 1000).toISOString(),
+      return res.status(429).json({
+        success: false,
+        message: `Muitas tentativas de login falhadas. Aguarde ${remainingMinutes} minutos.`,
+        lockedUntil: new Date(Date.now() + remainingMinutes * 60 * 1000).toISOString(),
+      });
+    }
+
+    // Verificar bloqueio por email (se fornecido)
+    if (email) {
+      const emailBlocked = await isBlocked(email, true);
+      if (emailBlocked) {
+        const remainingMinutes = CONFIG.LOCK_DURATION_MINUTES;
+
+        logger.warn('Login blocked - email locked', {
+          event: 'security.login_blocked',
+          ip: ipAddress,
+          email,
+        });
+
+        return res.status(429).json({
+          success: false,
+          message: `Muitas tentativas de login falhadas para este email. Aguarde ${remainingMinutes} minutos.`,
+          lockedUntil: new Date(Date.now() + remainingMinutes * 60 * 1000).toISOString(),
+        });
+      }
+    }
+
+    next();
+  } catch (error) {
+    logger.error('Error checking login attempts', {
+      event: 'security.check_error',
+      error: error instanceof Error ? error.message : 'Unknown error',
     });
+    // Allow login to proceed if there's an error checking attempts
+    next();
   }
-
-  // Verificar bloqueio por email (se fornecido)
-  if (email && isBlocked(email, true)) {
-    const remainingMinutes = CONFIG.LOCK_DURATION_MINUTES;
-
-    logger.warn('Login blocked - email locked', {
-      event: 'security.login_blocked',
-      ip: ipAddress,
-      email,
-    });
-
-    return res.status(429).json({
-      success: false,
-      message: `Muitas tentativas de login falhadas para este email. Aguarde ${remainingMinutes} minutos.`,
-      lockedUntil: new Date(Date.now() + remainingMinutes * 60 * 1000).toISOString(),
-    });
-  }
-
-  next();
 }
 
 /**
  * Obter estatísticas de tentativas de login
  */
-export function getLoginAttemptStats(hours: number = 24) {
+export async function getLoginAttemptStats(hours: number = 24): Promise<any> {
+  const conn = getPool();
   const since = new Date();
   since.setHours(since.getHours() - hours);
 
-  const stmt = db.prepare(`
-    SELECT
-      COUNT(*) as total,
-      SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as successful,
-      SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) as failed,
-      COUNT(DISTINCT ip_address) as unique_ips,
-      COUNT(DISTINCT email) as unique_emails
-    FROM login_attempts
-    WHERE attempted_at > ?
-  `);
-
-  return stmt.get(since.toISOString());
-}
-
-// Inicializar tabela quando o módulo for carregado
-try {
-  initializeLoginAttemptsTable();
-} catch (error) {
-  logger.error('Failed to initialize login attempts table', {
-    event: 'db.error',
-    error: error instanceof Error ? error.message : 'Unknown error',
-  });
-}
-
-// Agendar limpeza automática a cada hora
-setInterval(() => {
   try {
-    cleanupOldAttempts();
+    const [rows] = await conn.execute<any[]>(
+      `SELECT
+         COUNT(*) as total,
+         SUM(CASE WHEN success = TRUE THEN 1 ELSE 0 END) as successful,
+         SUM(CASE WHEN success = FALSE THEN 1 ELSE 0 END) as failed,
+         COUNT(DISTINCT ip_address) as unique_ips,
+         COUNT(DISTINCT email) as unique_emails
+       FROM login_attempts
+       WHERE attempted_at > ?`,
+      [since.toISOString()]
+    );
+
+    return rows.length > 0 ? rows[0] : null;
   } catch (error) {
-    logger.error('Failed to cleanup old login attempts', {
-      event: 'maintenance.error',
+    logger.error('Failed to get login attempt stats', {
+      event: 'db.error',
       error: error instanceof Error ? error.message : 'Unknown error',
     });
+    return null;
   }
-}, 60 * 60 * 1000); // 1 hora
+}
+
+// Schedule automatic cleanup every hour
+export function scheduleCleanup(): void {
+  setInterval(async () => {
+    try {
+      await cleanupOldAttempts();
+    } catch (error) {
+      logger.error('Failed to cleanup old login attempts', {
+        event: 'maintenance.error',
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  }, 60 * 60 * 1000); // 1 hour
+}

@@ -129,7 +129,7 @@ export function EncontroForm() {
           <p className="text-gray-600 mt-2">
             {isEditing
               ? 'Atualize as informações do encontro'
-              : 'Preencha os dados para criar um novo encontro de noivos'}
+              : 'Preencha os dados para criar um novo encontro de santificação'}
           </p>
         </div>
 
@@ -153,7 +153,7 @@ export function EncontroForm() {
                 value={formData.nome}
                 onChange={handleChange}
                 className="w-full p-3 border-2 border-gray-200 rounded-lg focus:ring-2 focus:ring-pastoral-blue-500 focus:border-pastoral-blue-500 transition-all"
-                placeholder="Ex: Encontro de Noivos - Março 2024"
+                placeholder="Ex: Encontro de Santificação - Março 2024"
               />
             </div>
 

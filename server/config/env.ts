@@ -11,10 +11,10 @@ dotenv.config();
 const envSchema = z.object({
   // Servidor
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
-  PORT: z.string().transform(Number).default('3001'),
+  PORT: z.string().transform(Number).default(5000),
 
   // Frontend URL (para links de reset de senha)
-  FRONTEND_URL: z.string().url().default('http://localhost:5173'),
+  FRONTEND_URL: z.string().url().default('http://localhost:3000'),
 
   // JWT - OBRIGATÓRIO EM PRODUÇÃO
   JWT_SECRET: z.string().min(32, 'JWT_SECRET deve ter no mínimo 32 caracteres'),
@@ -24,9 +24,16 @@ const envSchema = z.object({
   REFRESH_TOKEN_SECRET: z.string().min(32, 'REFRESH_TOKEN_SECRET deve ter no mínimo 32 caracteres'),
   REFRESH_TOKEN_EXPIRES_IN: z.string().default('30d'),
 
+  // Banco de Dados - MySQL
+  DB_HOST: z.string().default('localhost'),
+  DB_PORT: z.string().transform(Number).default(3306),
+  DB_USER: z.string().min(1, 'DB_USER é obrigatório'),
+  DB_PASSWORD: z.string().min(1, 'DB_PASSWORD é obrigatório'),
+  DB_NAME: z.string().min(1, 'DB_NAME é obrigatório'),
+
   // SendGrid - OBRIGATÓRIO para reset de senha
   SENDGRID_API_KEY: z.string().min(10, 'SENDGRID_API_KEY é obrigatório'),
-  SENDGRID_FROM_EMAIL: z.string().email('SENDGRID_FROM_EMAIL deve ser um email válido'),
+  SENDGRID_FROM_EMAIL: z.string().email(),
   SENDGRID_FROM_NAME: z.string().default('Sistema de Avaliações'),
 
   // Opcional - Admin Token (deprecado, manter por compatibilidade)
@@ -60,14 +67,18 @@ export function validateEnv() {
 
     return env;
   } catch (error) {
+    console.error('❌ Erro de configuração - Variáveis de ambiente inválidas:');
+
     if (error instanceof z.ZodError) {
-      console.error('❌ Erro de configuração - Variáveis de ambiente inválidas:');
-      error.errors.forEach(err => {
-        console.error(`   - ${err.path.join('.')}: ${err.message}`);
+      error.issues.forEach((issue: any) => {
+        console.error(`   - ${issue.path.join('.')}: ${issue.message}`);
       });
-      console.error('\n📝 Verifique o arquivo .env e certifique-se de que todas as variáveis obrigatórias estão configuradas.');
-      console.error('   Consulte o arquivo .env.example para referência.\n');
+    } else if (error instanceof Error) {
+      console.error(`   - ${error.message}`);
     }
+
+    console.error('\n📝 Verifique o arquivo .env e certifique-se de que todas as variáveis obrigatórias estão configuradas.');
+    console.error('   Consulte o arquivo .env.example para referência.\n');
     throw new Error('Falha na validação de variáveis de ambiente');
   }
 }

@@ -72,9 +72,9 @@ export function verifyToken(token: string): TokenPayload | null {
 /**
  * Autentica usuário com email e senha
  */
-export function authenticateUser(email: string, password: string): AuthResponse {
+export async function authenticateUser(email: string, password: string): Promise<AuthResponse> {
   // Buscar usuário por email
-  const user = getUserByEmail(email);
+  const user = await getUserByEmail(email);
 
   if (!user) {
     return {
@@ -101,7 +101,7 @@ export function authenticateUser(email: string, password: string): AuthResponse 
 
   // Se usuário é admin de pastoral, verificar se pastoral está ativa
   if (user.role === 'pastoral_admin' && user.pastoral_id) {
-    const pastoral = getPastoralById(user.pastoral_id);
+    const pastoral = await getPastoralById(user.pastoral_id);
 
     if (!pastoral || !pastoral.is_active) {
       return {
@@ -115,7 +115,7 @@ export function authenticateUser(email: string, password: string): AuthResponse 
   const token = generateToken(user);
 
   // Atualizar último login
-  updateUserLastLogin(user.id!);
+  await updateUserLastLogin(user.id!);
 
   // Retornar sucesso
   return {
@@ -134,14 +134,14 @@ export function authenticateUser(email: string, password: string): AuthResponse 
 /**
  * Obtém dados do usuário a partir do token
  */
-export function getUserFromToken(token: string): User | null {
+export async function getUserFromToken(token: string): Promise<User | null> {
   const payload = verifyToken(token);
 
   if (!payload) {
     return null;
   }
 
-  const user = getUserById(payload.userId);
+  const user = await getUserById(payload.userId);
 
   if (!user || !user.is_active) {
     return null;
@@ -233,14 +233,14 @@ function getRefreshTokenExpiration(): string {
 /**
  * Autentica usuário e retorna access token + refresh token
  */
-export function authenticateUserWithRefresh(
+export async function authenticateUserWithRefresh(
   email: string,
   password: string,
   ipAddress?: string,
   userAgent?: string
-): AuthResponseWithRefresh {
+): Promise<AuthResponseWithRefresh> {
   // Autenticar normalmente
-  const authResult = authenticateUser(email, password);
+  const authResult = await authenticateUser(email, password);
 
   if (!authResult.success || !authResult.user) {
     return authResult;
@@ -251,7 +251,7 @@ export function authenticateUserWithRefresh(
   const expiresAt = getRefreshTokenExpiration();
 
   // Salvar refresh token no banco
-  createRefreshToken({
+  await createRefreshToken({
     user_id: authResult.user.id,
     token: refreshToken,
     expires_at: expiresAt,
@@ -268,9 +268,9 @@ export function authenticateUserWithRefresh(
 /**
  * Renova access token usando refresh token
  */
-export function refreshAccessToken(refreshToken: string): AuthResponse {
+export async function refreshAccessToken(refreshToken: string): Promise<AuthResponse> {
   // Buscar refresh token
-  const tokenData = getRefreshToken(refreshToken);
+  const tokenData = await getRefreshToken(refreshToken);
 
   if (!tokenData) {
     return {
@@ -289,7 +289,7 @@ export function refreshAccessToken(refreshToken: string): AuthResponse {
   }
 
   // Buscar usuário
-  const user = getUserById(tokenData.user_id);
+  const user = await getUserById(tokenData.user_id);
 
   if (!user || !user.is_active) {
     return {
@@ -317,15 +317,15 @@ export function refreshAccessToken(refreshToken: string): AuthResponse {
 /**
  * Revoga refresh token (logout)
  */
-export function logoutUser(refreshToken: string): void {
-  revokeRefreshToken(refreshToken);
+export async function logoutUser(refreshToken: string): Promise<void> {
+  await revokeRefreshToken(refreshToken);
 }
 
 /**
  * Revoga todos os refresh tokens de um usuário
  */
-export function logoutAllSessions(userId: number): void {
-  revokeAllUserRefreshTokens(userId);
+export async function logoutAllSessions(userId: number): Promise<void> {
+  await revokeAllUserRefreshTokens(userId);
 }
 
 // ============================================
@@ -351,7 +351,7 @@ export function generatePasswordResetToken(): string {
  */
 export async function initiatePasswordReset(email: string, ipAddress?: string): Promise<{ success: boolean; message: string; token?: string }> {
   // Buscar usuário por email
-  const user = getUserByEmail(email);
+  const user = await getUserByEmail(email);
 
   // Por segurança, sempre retornar sucesso mesmo se email não existir
   // Isso previne enumeration attacks
@@ -368,7 +368,7 @@ export async function initiatePasswordReset(email: string, ipAddress?: string): 
   expiresAt.setHours(expiresAt.getHours() + 1); // Expira em 1 hora
 
   // Salvar token no banco
-  createPasswordResetToken({
+  await createPasswordResetToken({
     user_id: user.id!,
     token: resetToken,
     expires_at: expiresAt.toISOString(),
@@ -402,8 +402,8 @@ export async function initiatePasswordReset(email: string, ipAddress?: string): 
 /**
  * Valida token de reset de senha
  */
-export function validatePasswordResetToken(token: string): { valid: boolean; userId?: number; message?: string } {
-  const tokenData = getPasswordResetToken(token);
+export async function validatePasswordResetToken(token: string): Promise<{ valid: boolean; userId?: number; message?: string }> {
+  const tokenData = await getPasswordResetToken(token);
 
   if (!tokenData) {
     return {
@@ -421,9 +421,9 @@ export function validatePasswordResetToken(token: string): { valid: boolean; use
 /**
  * Reseta senha usando token
  */
-export function resetPasswordWithToken(token: string, newPassword: string): { success: boolean; message: string } {
+export async function resetPasswordWithToken(token: string, newPassword: string): Promise<{ success: boolean; message: string }> {
   // Validar token
-  const validation = validatePasswordResetToken(token);
+  const validation = await validatePasswordResetToken(token);
 
   if (!validation.valid) {
     return {
@@ -442,7 +442,7 @@ export function resetPasswordWithToken(token: string, newPassword: string): { su
   }
 
   // Buscar usuário
-  const user = getUserById(validation.userId!);
+  const user = await getUserById(validation.userId!);
   if (!user) {
     return {
       success: false,
@@ -452,13 +452,13 @@ export function resetPasswordWithToken(token: string, newPassword: string): { su
 
   // Atualizar senha
   const newPasswordHash = hashPassword(newPassword);
-  updateUserPassword(validation.userId!, newPasswordHash);
+  await updateUserPassword(validation.userId!, newPasswordHash);
 
   // Marcar token como usado
-  markPasswordResetTokenAsUsed(token);
+  await markPasswordResetTokenAsUsed(token);
 
   // Revogar todos os refresh tokens do usuário (forçar re-login)
-  revokeAllUserRefreshTokens(validation.userId!);
+  await revokeAllUserRefreshTokens(validation.userId!);
 
   return {
     success: true,
@@ -466,15 +466,3 @@ export function resetPasswordWithToken(token: string, newPassword: string): { su
   };
 }
 
-/**
- * Envia email de reset de senha (simulado)
- */
-export function sendPasswordResetEmail(email: string, token: string): void {
-  // TODO: Implementar envio de email real usando serviço SMTP
-  // Por exemplo: SendGrid, AWS SES, Nodemailer, etc.
-
-  console.log('📧 EMAIL SIMULADO - Password Reset');
-  console.log(`Para: ${email}`);
-  console.log(`Assunto: Redefinição de Senha`);
-  console.log(`Link: http://localhost:5173/reset-password?token=${token}`);
-}
